@@ -2,7 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { supabase } from './src/db/supabase.js';
-import { GoogleGenAI } from '@google/genai';
+import { fetchMangaChapters, fetchPageImages } from './src/services/mangaProvider.js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 dotenv.config();
 
@@ -10,7 +11,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const aiModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 const mapMangadexToManga = (m: any) => {
     const title = m.attributes.title.en || Object.values(m.attributes.title)[0] || 'Unknown';
@@ -124,12 +126,8 @@ app.post('/api/ai/summary', async (req, res) => {
             return res.status(401).json({ error: 'Gemini API Key missing' });
         }
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-1.5-flash',
-            contents: `Provide a brief, engaging summary of the manga titled "${title}". Focus on the premise and why it's popular. Keep it under 100 words.`,
-        });
-
-        const summary = response.text || 'No summary available.';
+        const response = await aiModel.generateContent(`Provide a brief, engaging summary of the manga titled "${title}". Focus on the premise and why it's popular. Keep it under 100 words.`);
+        const summary = response.response.text() || 'No summary available.';
 
         // Cache it in Supabase
         await supabase.from('manga').update({ ai_summary: summary }).eq('title', title);
@@ -308,14 +306,65 @@ app.get('/api/manga/chapter/:id/pages', async (req, res) => {
     }
 });
 
+// MangaKakalot Scraper Routes
+app.get('/api/scrape/chapters', async (req, res) => {
+    try {
+        const { url } = req.query;
+        if (!url) return res.status(400).json({ error: 'URL required' });
+        const chapters = await fetchMangaChapters(url as string);
+        res.json(chapters);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/scrape/pages', async (req, res) => {
+    try {
+        const { url } = req.query;
+        if (!url) return res.status(400).json({ error: 'URL required' });
+        const pages = await fetchPageImages(url as string);
+        res.json(pages);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/ai/translate', async (req, res) => {
     try {
         const { imageUrl } = req.body;
         if (!imageUrl) return res.status(400).json({ error: 'Image URL required' });
 
-        if (!process.env.GEMINI_API_KEY) {
+        const authHeader = req.headers.authorization;
+        let userApiKey = null;
+
+        if (authHeader) {
+            const token = authHeader.replace('Bearer ', '');
+            // Create a temporary client with the user's token to call RPC
+            const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+            if (user && !authError) {
+                // Call RPC to get decrypted key
+                // Note: We need a client initialized with the user's token or just use the service role client with an explicit filter if we want to bypass RLS, but the prompt says ONLY if owner matches.
+                // Best way: Use the service role client BUT verify the user first, then fetch for that specifically.
+                // Actually, the SECURITY DEFINER function handles the check via auth.uid().
+                // So we MUST use a client that has the user's context.
+
+                const { data: decryptedKey, error: rpcError } = await supabase.rpc('get_decrypted_user_key');
+                if (!rpcError && decryptedKey) {
+                    userApiKey = decryptedKey;
+                }
+            }
+        }
+
+        const activeApiKey = userApiKey || process.env.GEMINI_API_KEY;
+
+        if (!activeApiKey) {
             return res.status(401).json({ error: 'Gemini API Key missing' });
         }
+
+        // Initialize local AI instance with the specific key
+        const userAi = new GoogleGenerativeAI(activeApiKey);
+        const model = userAi.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
         const imageRes = await fetch(imageUrl);
         const arrayBuffer = await imageRes.arrayBuffer();
@@ -326,20 +375,14 @@ app.post('/api/ai/translate', async (req, res) => {
         const prompt = `You are a professional manga translator. Analyze this manga page and identify all the text bubbles. Extract the original Japanese text and provide a natural English translation for each bubble. 
 Return ONLY a valid JSON array of objects in this exact format: [{"original": "こんにちは", "translated": "Hello"}] - No markdown formatting, just the raw JSON.`;
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-1.5-flash',
-            contents: [
-                {
-                    role: 'user',
-                    parts: [
-                        { inlineData: { data: base64Data, mimeType } },
-                        { text: prompt }
-                    ]
-                }
-            ]
-        });
+        const response = await model.generateContent([
+            {
+                inlineData: { data: base64Data, mimeType }
+            },
+            { text: prompt }
+        ]);
 
-        let text = response.text || '[]';
+        let text = response.response.text() || '[]';
         text = text.replace(/```json/g, '').replace(/```/g, '').trim();
         const translations = JSON.parse(text);
 
@@ -349,7 +392,7 @@ Return ONLY a valid JSON array of objects in this exact format: [{"original": "�
         console.error('Translation error:', err);
         const msg = err?.message || '';
         if (err?.status === 429 || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
-            return res.status(429).json({ error: 'Gemini API quota exceeded. Enable billing at https://ai.google.dev or wait and retry.' });
+            return res.status(429).json({ error: 'Gemini API quota exceeded. If using BYOK, check your billing. Otherwise, wait and retry.' });
         }
         res.status(500).json({ error: 'Failed to translate image' });
     }

@@ -35,7 +35,9 @@ import {
   Zap,
   X,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Shield,
+  Key
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
@@ -1040,8 +1042,8 @@ const Reader = ({ setView, manga }: { setView: (v: View) => void, manga: Manga |
               key={ch.id}
               onClick={() => setCurrentChapter(ch)}
               className={`w-full text-left flex items-center justify-between p-3 rounded-lg transition-colors border ${currentChapter?.id === ch.id
-                  ? 'bg-primary/20 border-primary/30 group'
-                  : 'hover:bg-card-dark border-transparent'
+                ? 'bg-primary/20 border-primary/30 group'
+                : 'hover:bg-card-dark border-transparent'
                 }`}
             >
               <div className="flex flex-col gap-0.5">
@@ -1218,7 +1220,10 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
   const [username, setUsername] = useState(user.user_metadata?.username || '');
   const [avatarUrl, setAvatarUrl] = useState(user.user_metadata?.avatar_url || '');
   const [favoriteTags, setFavoriteTags] = useState<string[]>([]);
+  const [apiKey, setApiKey] = useState('');
+  const [hasExistingKey, setHasExistingKey] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [keyLoading, setKeyLoading] = useState(false);
   const [message, setMessage] = useState({ text: '', type: '' });
 
   const AVAILABLE_TAGS = ['Action', 'Romance', 'Comedy', 'Horror', 'Sci-Fi', 'Fantasy', 'Slice of Life', 'Mystery', 'Drama', 'Sports'];
@@ -1228,7 +1233,50 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
       .then(({ data }) => {
         if (data?.favorite_tags) setFavoriteTags(data.favorite_tags);
       });
+
+    // Check if user has an API Key in Vault
+    supabase.from('user_keys_map').select('user_id').eq('user_id', user.id).single()
+      .then(({ data }) => {
+        if (data) setHasExistingKey(true);
+      });
   }, [user.id]);
+
+  const handleSaveKey = async () => {
+    if (!apiKey.startsWith('AIza')) {
+      setMessage({ text: 'Invalid Gemini API Key format.', type: 'error' });
+      return;
+    }
+    setKeyLoading(true);
+    try {
+      // Test the key first
+      const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      if (!testRes.ok) throw new Error('Invalid API Key');
+
+      const { error } = await supabase.rpc('upsert_user_api_key', { api_key_text: apiKey });
+      if (error) throw error;
+
+      setHasExistingKey(true);
+      setApiKey('');
+      setMessage({ text: 'API Key saved securely to Vault!', type: 'success' });
+    } catch (err: any) {
+      setMessage({ text: err.message || 'Error saving API key', type: 'error' });
+    }
+    setKeyLoading(false);
+  };
+
+  const handleRemoveKey = async () => {
+    setKeyLoading(true);
+    try {
+      const { error: deleteMapError } = await supabase.from('user_keys_map').delete().eq('user_id', user.id);
+      if (deleteMapError) throw deleteMapError;
+
+      setHasExistingKey(false);
+      setMessage({ text: 'API Key removed.', type: 'success' });
+    } catch (err: any) {
+      setMessage({ text: 'Error removing key.', type: 'error' });
+    }
+    setKeyLoading(false);
+  };
 
   const toggleTag = (tag: string) => {
     setFavoriteTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
@@ -1338,6 +1386,59 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
               ))}
             </div>
             <p className="text-xs text-slate-500 mt-2">Select your favorite genres to improve your Explore page recommendations.</p>
+          </div>
+
+          <div className="pt-8 mt-8 border-t border-white/10">
+            <div className="flex items-center gap-2 mb-4">
+              <Shield size={20} className="text-primary" />
+              <h3 className="text-sm font-black uppercase tracking-widest text-white">Manage API Key (BYOK)</h3>
+            </div>
+
+            <div className="bg-background-dark/50 rounded-2xl p-6 border border-white/5 space-y-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-400 uppercase">Gemini API Key</label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder={hasExistingKey ? "AIza••••••••••••••••••••xR4" : "Paste your Gemini API Key here"}
+                      className="w-full bg-background-dark border border-white/10 rounded-xl py-3 px-4 text-white focus:ring-2 focus:ring-primary outline-none transition-all pr-12"
+                    />
+                    <Key className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-600" size={18} />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSaveKey}
+                    disabled={keyLoading || !apiKey}
+                    className="bg-primary text-white px-6 rounded-xl font-bold hover:bg-primary/90 transition-all disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {keyLoading ? '...' : 'Save Key'}
+                  </button>
+                </div>
+              </div>
+
+              {hasExistingKey && (
+                <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/5">
+                  <div className="flex items-center gap-2 text-xs text-slate-400 font-medium">
+                    <CheckCircle2 size={14} className="text-green-500" />
+                    <span>Vault Encryption Active: Gemini API Key is stored periodically.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveKey}
+                    className="text-[10px] text-red-400 hover:text-red-300 font-bold uppercase tracking-wider"
+                  >
+                    Remove Key
+                  </button>
+                </div>
+              )}
+              <p className="text-[10px] text-slate-500">
+                Your API key is encrypted at rest using Supabase Vault and is never exposed to the frontend after saving.
+                It is used exclusively by the backend to perform translations.
+              </p>
+            </div>
           </div>
 
           <div className="pt-6 border-t border-white/10 flex justify-end gap-3">
