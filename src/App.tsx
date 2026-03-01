@@ -37,7 +37,14 @@ import {
   CheckCircle,
   AlertCircle,
   Shield,
-  Key
+  Key,
+  BookCopy,
+  Heart,
+  Globe,
+  SkipForward,
+  Filter,
+  Sparkles,
+  ScrollText,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
@@ -51,8 +58,9 @@ interface Manga {
   title: string;
   cover: string;
   genre: string[];
-  rating: number;
+  rating: number | string;
   status: string;
+  isFavorite?: boolean;
 }
 
 interface Task {
@@ -118,6 +126,8 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+  // Only show search on Explore (landing) and Library pages
+  const searchAllowed = currentView === 'landing' || currentView === 'library';
 
   return (
     <header className="fixed top-0 z-50 w-full border-b border-white/10 bg-[#191022]/85 backdrop-blur-xl">
@@ -130,44 +140,46 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
         </div>
 
         <div className="flex items-center gap-4 flex-1 justify-end md:justify-center px-4">
-          <motion.div
-            initial={false}
-            animate={{ width: isSearchExpanded ? '100%' : '40px' }}
-            className="relative max-w-md h-10 flex items-center"
-          >
-            <button
-              onClick={() => setIsSearchExpanded(!isSearchExpanded)}
-              className={`absolute left-0 z-10 p-2 text-slate-400 hover:text-white transition-colors ${isSearchExpanded ? 'pointer-events-none' : ''}`}
+          {searchAllowed && (
+            <motion.div
+              initial={false}
+              animate={{ width: isSearchExpanded ? '100%' : '40px' }}
+              className="relative max-w-md h-10 flex items-center"
             >
-              <Search size={20} />
-            </button>
-            <AnimatePresence>
-              {isSearchExpanded && (
-                <>
-                  <motion.input
-                    initial={{ opacity: 0, width: 0 }}
-                    animate={{ opacity: 1, width: '100%' }}
-                    exit={{ opacity: 0, width: 0 }}
-                    autoFocus
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onBlur={() => !searchQuery && setIsSearchExpanded(false)}
-                    placeholder="Search manga titles..."
-                    className="w-full bg-background-dark/50 border border-white/10 rounded-full py-2 pl-10 pr-8 text-sm text-white focus:ring-2 focus:ring-primary outline-none transition-all"
-                  />
-                  {searchQuery && (
-                    <button
-                      onMouseDown={(e) => { e.preventDefault(); setSearchQuery(''); }}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white transition-colors z-20"
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </>
-              )}
-            </AnimatePresence>
-          </motion.div>
+              <button
+                onClick={() => setIsSearchExpanded(!isSearchExpanded)}
+                className={`absolute left-0 z-10 p-2 text-slate-400 hover:text-white transition-colors ${isSearchExpanded ? 'pointer-events-none' : ''}`}
+              >
+                <Search size={20} />
+              </button>
+              <AnimatePresence>
+                {isSearchExpanded && (
+                  <>
+                    <motion.input
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: '100%' }}
+                      exit={{ opacity: 0, width: 0 }}
+                      autoFocus
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onBlur={() => !searchQuery && setIsSearchExpanded(false)}
+                      placeholder="Search manga titles..."
+                      className="w-full bg-background-dark/50 border border-white/10 rounded-full py-2 pl-10 pr-8 text-sm text-white focus:ring-2 focus:ring-primary outline-none transition-all"
+                    />
+                    {searchQuery && (
+                      <button
+                        onMouseDown={(e) => { e.preventDefault(); setSearchQuery(''); }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white transition-colors z-20"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
 
           <nav className={`flex items-center gap-4 md:gap-6 ${isSearchExpanded ? 'hidden md:flex' : 'flex'}`}>
             <button onClick={() => setView('landing')} className={`text-sm font-medium transition-colors ${currentView === 'landing' ? 'text-white border-b-2 border-primary pb-0.5' : 'text-slate-300 hover:text-white'}`}>Explore</button>
@@ -239,10 +251,42 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
   );
 };
 
-const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searchResults, onImportUrl }: { setView: (v: View) => void, searchQuery: string, onSelectManga: (m: Manga) => void, trendingManga: Manga[], searchResults: Manga[], onImportUrl: (url: string) => void }) => {
-  const displayManga = searchQuery.trim() ? searchResults : trendingManga;
+const GENRE_LIST = ['Action', 'Adventure', 'Romance', 'Comedy', 'Horror', 'Fantasy', 'Sci-Fi', 'Mystery', 'Drama', 'Historical', 'Psychological', 'Supernatural', 'Slice of Life', 'Sports'];
+
+const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searchResults, onImportUrl, favoriteGenres = [] }: {
+  setView: (v: View) => void,
+  searchQuery: string,
+  onSelectManga: (m: Manga) => void,
+  trendingManga: Manga[],
+  searchResults: Manga[],
+  onImportUrl: (url: string) => void,
+  favoriteGenres?: string[]
+}) => {
   const [heroUrl, setHeroUrl] = useState('');
   const [importing, setImporting] = useState(false);
+  const [activeGenres, setActiveGenres] = useState<string[]>(favoriteGenres);
+  const [filteredManga, setFilteredManga] = useState<Manga[]>([]);
+  const [filterLoading, setFilterLoading] = useState(false);
+  const [isPersonalized, setIsPersonalized] = useState(favoriteGenres.length > 0);
+
+  const displayManga = searchQuery.trim() ? searchResults : (activeGenres.length > 0 ? filteredManga : trendingManga);
+
+  useEffect(() => {
+    if (activeGenres.length === 0) { setFilteredManga([]); return; }
+    setFilterLoading(true);
+    const endpoint = searchQuery.trim()
+      ? `/api/manga/search?q=${encodeURIComponent(searchQuery)}&genres=${encodeURIComponent(activeGenres.join(','))}`
+      : `/api/manga/search?genres=${encodeURIComponent(activeGenres.join(','))}`;
+    fetch(endpoint).then(r => r.json()).then(data => {
+      setFilteredManga(Array.isArray(data) ? data : []);
+      setFilterLoading(false);
+    }).catch(() => setFilterLoading(false));
+  }, [activeGenres, searchQuery]);
+
+  const toggleGenre = (g: string) => {
+    setIsPersonalized(false);
+    setActiveGenres(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
+  };
 
   const handleImport = async () => {
     if (!heroUrl.trim()) return;
@@ -334,17 +378,32 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
         </div>
       </section>
 
-      {/* Trending */}
+      {/* Trending / Browse */}
       <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-            <TrendingUp className="text-primary" />
-            {searchQuery ? `Search Results for "${searchQuery}"` : 'Trending Now'}
+            {isPersonalized ? <Sparkles className="text-primary" /> : <TrendingUp className="text-primary" />}
+            {searchQuery ? `Search Results for "${searchQuery}"` : isPersonalized ? 'For You ✨' : activeGenres.length > 0 ? `${activeGenres[0]} Manga` : 'Trending Now'}
           </h2>
-          <div className="flex gap-2">
-            <button className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white"><ChevronLeft /></button>
-            <button className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white"><ChevronRight /></button>
-          </div>
+          {activeGenres.length > 0 && (
+            <button onClick={() => { setActiveGenres([]); setIsPersonalized(false); }} className="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition-colors">
+              <X size={12} /> Clear Filter
+            </button>
+          )}
+        </div>
+
+        {/* Genre Filter Chips */}
+        <div className="flex flex-wrap gap-2 mb-6">
+          {GENRE_LIST.map(g => (
+            <button
+              key={g}
+              onClick={() => toggleGenre(g)}
+              className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all border ${activeGenres.includes(g)
+                ? 'bg-primary text-white border-primary shadow-lg shadow-primary/30'
+                : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-white'
+                }`}
+            >{g}</button>
+          ))}
         </div>
 
         {displayManga.length > 0 ? (
@@ -362,6 +421,7 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
                     alt={manga.title}
                     className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
                     referrerPolicy="no-referrer"
+                    onError={(e) => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${manga.id}/400/600`; }}
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
                     <button className="w-full rounded-lg bg-primary py-2 text-sm font-bold text-white shadow-lg">View Details</button>
@@ -593,71 +653,133 @@ const Dashboard = ({ setView, onUpload, tasks, historyList }: { setView: (v: Vie
   </div>
 );
 
-const LibraryPage = ({ setView, searchQuery, onSelectManga, trendingManga, searchResults }: { setView: (v: View) => void, searchQuery: string, onSelectManga: (m: Manga) => void, trendingManga: Manga[], searchResults: Manga[] }) => {
-  const [activeTab, setActiveTab] = useState<'reading' | 'completed' | 'plan_to_read'>('reading');
+const LibraryPage = ({ setView, onSelectManga, user, session }: { setView: (v: View) => void, onSelectManga: (m: Manga) => void, user: User | null, session: any }) => {
+  const [activeTab, setActiveTab] = useState<'all' | 'favourites'>('all');
+  const [libraryManga, setLibraryManga] = useState<Manga[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [libSearch, setLibSearch] = useState('');
 
-  const displayManga = searchQuery.trim() ? searchResults : trendingManga;
+  const fetchLibrary = async () => {
+    if (!user || !session?.access_token) return;
+    setLoading(true);
+    const res = await fetch('/api/library', { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+    const data = await res.json();
+    if (Array.isArray(data)) setLibraryManga(data);
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchLibrary(); }, [user, session]);
+
+  const handleToggleFavorite = async (e: React.MouseEvent, manga: Manga) => {
+    e.stopPropagation();
+    if (!session?.access_token) return;
+    const newFav = !manga.isFavorite;
+    setLibraryManga(prev => prev.map(m => m.id === manga.id ? { ...m, isFavorite: newFav } : m));
+    await fetch(`/api/library/${manga.id}/favorite`, {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isFavorite: newFav })
+    });
+  };
+
+  const handleRemove = async (e: React.MouseEvent, mangaId: string) => {
+    e.stopPropagation();
+    if (!session?.access_token) return;
+    setLibraryManga(prev => prev.filter(m => m.id !== mangaId));
+    await fetch(`/api/library/${mangaId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${session.access_token}` } });
+  };
+
+  const displayed = libraryManga
+    .filter(m => activeTab === 'favourites' ? m.isFavorite : true)
+    .filter(m => !libSearch || m.title.toLowerCase().includes(libSearch.toLowerCase()));
 
   return (
-    <div className="pt-24 pb-12 px-4 sm:px-6 lg:px-8 mx-auto max-w-7xl">
-      <div className="flex items-center justify-between mb-8">
+    <div className="pt-24 pb-12 px-4 max-w-7xl mx-auto">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-white">My Library</h1>
-          <p className="text-slate-400 mt-1">Your collection of translated manga and saved titles.</p>
+          <h1 className="text-4xl font-black text-white tracking-tight">Personal Library</h1>
+          <p className="text-slate-400 mt-2">{libraryManga.length} manga saved · {libraryManga.filter(m => m.isFavorite).length} favourites</p>
         </div>
-        <div className="flex gap-2">
-          <button className="p-2 rounded-lg bg-white/5 border border-white/10 text-slate-300 hover:text-white transition-colors">
-            <LayoutDashboard size={18} />
-          </button>
-          <button className="p-2 rounded-lg bg-white/5 border border-white/10 text-slate-300 hover:text-white transition-colors">
-            <Menu size={18} />
-          </button>
+        <div className="flex items-center gap-3">
+          {/* Library search */}
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={libSearch}
+              onChange={e => setLibSearch(e.target.value)}
+              placeholder="Search library..."
+              className="bg-card-dark border border-white/10 rounded-xl py-2 pl-9 pr-3 text-sm text-white focus:ring-2 focus:ring-primary outline-none w-44"
+            />
+          </div>
+          <div className="flex bg-card-dark p-1 rounded-xl border border-white/10">
+            {(['all', 'favourites'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-5 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-1.5 ${activeTab === tab ? 'bg-primary text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+              >
+                {tab === 'favourites' && <Heart size={14} className={activeTab === 'favourites' ? 'fill-white' : ''} />}
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {displayManga.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-          {displayManga.map((manga) => (
+      {loading ? (
+        <div className="flex flex-col items-center justify-center py-20 gap-4">
+          <RefreshCw className="animate-spin text-primary" size={32} />
+          <p className="text-slate-400 animate-pulse">Scanning your bookshelves...</p>
+        </div>
+      ) : displayed.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
+          {displayed.map((manga) => (
             <motion.div
               key={manga.id}
-              whileHover={{ y: -5 }}
-              className="group relative flex flex-col gap-3 cursor-pointer"
+              whileHover={{ y: -8 }}
+              className="group cursor-pointer relative"
               onClick={() => onSelectManga(manga)}
             >
-              <div className="aspect-[2/3] w-full overflow-hidden rounded-xl bg-slate-800 shadow-lg relative">
-                <img
-                  src={manga.cover}
-                  alt={manga.title}
-                  className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
-                  <button className="w-full rounded-lg bg-primary py-2 text-sm font-bold text-white shadow-lg">View Details</button>
-                </div>
-                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-xs text-white font-bold flex items-center gap-1">
-                  <Star size={12} className="text-yellow-400 fill-yellow-400" /> {manga.rating}
-                </div>
+              <div className="aspect-[2/3] w-full overflow-hidden rounded-2xl bg-slate-800 shadow-xl relative border border-white/5">
+                <img src={manga.cover} alt={manga.title} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110" referrerPolicy="no-referrer" onError={(e) => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${manga.id}/400/600`; }} />
+                {/* Favourite toggle */}
+                <button
+                  onClick={(e) => handleToggleFavorite(e, manga)}
+                  className={`absolute top-2 left-2 p-1.5 rounded-full backdrop-blur-md transition-all ${manga.isFavorite ? 'bg-red-500/80 text-white' : 'bg-black/50 text-slate-400 opacity-0 group-hover:opacity-100'}`}
+                >
+                  <Heart size={12} className={manga.isFavorite ? 'fill-white' : ''} />
+                </button>
+                {/* Remove button */}
+                <button
+                  onClick={(e) => handleRemove(e, manga.id)}
+                  className="absolute top-2 right-2 p-1.5 rounded-full bg-black/50 text-slate-400 backdrop-blur-md opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/80 hover:text-white"
+                >
+                  <X size={12} />
+                </button>
               </div>
-              <div className="space-y-1">
-                <h3 className="font-bold text-white leading-tight group-hover:text-primary transition-colors">{manga.title}</h3>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-slate-400">Ch. 102 Read</span>
-                  <span className="text-[10px] text-primary font-bold">85% Complete</span>
-                </div>
-              </div>
+              <h3 className="mt-3 font-bold text-white text-sm line-clamp-1 group-hover:text-primary transition-colors">{manga.title}</h3>
+              <p className="text-xs text-slate-500 mt-1">{manga.rating} ★ · {manga.status}</p>
             </motion.div>
           ))}
         </div>
       ) : (
-        <div className="text-center py-20">
-          <p className="text-slate-400 text-lg">No manga found in your library matching "{searchQuery}".</p>
+        <div className="text-center py-40 bg-card-dark rounded-3xl border border-white/5 border-dashed">
+          <div className="inline-flex h-20 w-20 items-center justify-center rounded-full bg-white/5 text-slate-600 mb-6">
+            {activeTab === 'favourites' ? <Heart size={40} /> : <BookCopy size={40} />}
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">{activeTab === 'favourites' ? 'No favourites yet' : 'Your library is empty'}</h2>
+          <p className="text-slate-400 mb-8 max-w-sm mx-auto">{activeTab === 'favourites' ? 'Heart a manga in your library to add it to favourites.' : 'Start exploring and add manga to your personal collection.'}</p>
+          <button onClick={() => setView('landing')} className="bg-primary hover:bg-primary/90 text-white font-bold px-8 py-3 rounded-xl transition-all shadow-lg shadow-primary/20">
+            Explore Trending Manga
+          </button>
         </div>
       )}
     </div>
   );
 };
 
-const MangaDetailPage = ({ manga, setView }: { manga: Manga, setView: (v: View) => void }) => {
+const MangaDetailPage = ({ manga, setView, onAddToLibrary, source, setSource }: { manga: Manga, setView: (v: View) => void, onAddToLibrary: (m: Manga) => void, source: 'mangadex' | 'mangakakalot', setSource: (s: 'mangadex' | 'mangakakalot') => void }) => {
   const [summary, setSummary] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
@@ -704,7 +826,7 @@ const MangaDetailPage = ({ manga, setView }: { manga: Manga, setView: (v: View) 
             animate={{ opacity: 1, scale: 1 }}
             className="aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10"
           >
-            <img src={manga.cover} alt={manga.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            <img src={manga.cover} alt={manga.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" onError={(e) => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${manga.id}/400/600`; }} />
           </motion.div>
         </div>
 
@@ -756,17 +878,43 @@ const MangaDetailPage = ({ manga, setView }: { manga: Manga, setView: (v: View) 
             </div>
           </div>
 
-          <div className="flex gap-4">
-            <button
-              onClick={() => setView('reader')}
-              className="flex-1 bg-primary text-white font-bold py-4 rounded-xl shadow-lg hover:bg-primary/90 transition-all flex items-center justify-center gap-2"
-            >
-              <BookOpen size={20} />
-              Start Reading
-            </button>
-            <button className="px-6 py-4 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-colors">
-              <History size={20} />
-            </button>
+          <div className="flex flex-col gap-6">
+            <div className="flex gap-4">
+              <button
+                onClick={() => setView('reader')}
+                className="flex-1 bg-primary text-white font-bold py-4 rounded-xl shadow-lg hover:bg-primary/90 transition-all flex items-center justify-center gap-2 group"
+              >
+                <BookOpen size={20} className="group-hover:scale-110 transition-transform" />
+                Start Reading
+              </button>
+              <button
+                onClick={() => onAddToLibrary(manga)}
+                className="flex-1 bg-white/5 border border-white/10 text-white font-bold py-4 rounded-xl hover:bg-white/10 transition-colors flex items-center justify-center gap-2"
+              >
+                <Library size={20} />
+                Library
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-card-dark border border-white/5 space-y-3">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block">Choose Provider Source</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { id: 'mangadex', name: 'MangaDex', icon: <Zap size={14} /> },
+                  { id: 'mangakakalot', name: 'Kakalot / Nato', icon: <Search size={14} /> }
+                ].map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSource(s.id as any)}
+                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-xs font-bold transition-all ${source === s.id ? 'bg-primary/20 border-primary text-white ring-1 ring-primary/30' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
+                      }`}
+                  >
+                    {s.icon}
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -965,60 +1113,251 @@ const SignupPage = ({ setView }: { setView: (v: View) => void }) => {
   );
 };
 
-const Reader = ({ setView, manga }: { setView: (v: View) => void, manga: Manga | null }) => {
+const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Portuguese', 'Italian', 'Indonesian', 'Malay', 'Thai', 'Vietnamese', 'Dutch', 'Polish', 'Russian', 'Arabic', 'Turkish'];
+
+const Reader = ({ setView, manga, session, source }: { setView: (v: View) => void, manga: Manga | null, session: any, source: 'mangadex' | 'mangakakalot' }) => {
   const [chapters, setChapters] = useState<any[]>([]);
+  const [chapterIndex, setChapterIndex] = useState(0);
   const [currentChapter, setCurrentChapter] = useState<any>(null);
   const [pages, setPages] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [translations, setTranslations] = useState<any[]>([]);
   const [overlayActive, setOverlayActive] = useState(true);
+  const [translationEnabled, setTranslationEnabled] = useState(true);
   const [statusText, setStatusText] = useState('');
+  const [targetLanguage, setTargetLanguage] = useState<string>(() => localStorage.getItem('manga_target_lang') || 'English');
+  const [showLangPicker, setShowLangPicker] = useState(false);
+  const [endOfChapter, setEndOfChapter] = useState(false);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [hoveredMarkerId, setHoveredMarkerId] = useState<number | null>(null);
+  const [showScript, setShowScript] = useState(true);
+  const [ocrLanguage, setOcrLanguage] = useState<string>('japan'); // Default to PaddleOCR japan model identifier
+  const [imageScale, setImageScale] = useState({ w: 800, h: 1200 });
+  const progressTimerRef = React.useRef<any>(null);
 
+  // Load chapters, then restore progress
   useEffect(() => {
-    if (manga) {
-      setStatusText('Fetching chapters...');
-      fetch(`/api/manga/${manga.id}/chapters`).then(res => res.json()).then(data => {
-        if (data && data.length > 0) {
-          setChapters(data);
-          setCurrentChapter(data[0]);
+    if (!manga) return;
+    setStatusText('Fetching chapters...');
+    const loadChapters = async () => {
+      try {
+        // Pass manga title so the backend can resolve stale/wrong IDs via MangaDex title search
+        let data = await fetch(`/api/manga/${manga.id}/chapters?title=${encodeURIComponent(manga.title)}&source=${source}`).then(res => res.json());
+
+        // Fallback: If MangaDex API blocked the feed, use our backend scraper
+        if (!data || data.length === 0) {
+          setStatusText('API Blocked. Scraping alternate sources...');
+          // Pass manga title directly — MangaDex blocks metadata fetches for licensed titles
+          data = await fetch(`/api/scrape/chapters?title=${encodeURIComponent(manga.title)}`).then(r => r.json());
+
+          if (!data || data.length === 0) {
+            setStatusText('No chapters available for this manga.');
+            return;
+          }
+
+          // Remap scraper data to match MangaDex expected schema so UI doesn't crash
+          data = data.map((c: any, index: number) => ({
+            id: c.url, // Scraper URL used as ID
+            attributes: {
+              chapter: c.chapter || (data.length - index).toString(),
+              title: c.title || `Chapter ${c.chapter}`,
+              translatedLanguage: 'en'
+            }
+          }));
         }
-      });
-    }
-  }, [manga]);
 
+        setChapters(data);
+        // Restore progress
+        let startChIdx = 0;
+        let startPage = 0;
+        if (session?.access_token) {
+          try {
+            const p = await fetch(`/api/progress/${manga.id}`, { headers: { Authorization: `Bearer ${session.access_token}` } }).then(r => r.json());
+            if (p?.chapter_id) {
+              const idx = data.findIndex((c: any) => c.id === p.chapter_id);
+              if (idx >= 0) { startChIdx = idx; startPage = p.page_index || 0; }
+            }
+          } catch (_) { }
+        }
+        setChapterIndex(startChIdx);
+        setCurrentChapter(data[startChIdx]);
+        setCurrentPage(startPage);
+      } catch (err) {
+        console.error(err);
+        setStatusText('Failed to load chapters.');
+      }
+    };
+    loadChapters();
+  }, [manga, source]);
+
+  // Load pages when chapter changes
   useEffect(() => {
-    if (currentChapter) {
-      setStatusText('Fetching pages...');
-      setPages([]);
-      fetch(`/api/manga/chapter/${currentChapter.id}/pages`).then(res => res.json()).then(data => {
+    if (!currentChapter) return;
+    setPages([]);
+    setCurrentPage(0);
+    setStatusText('Loading pages...');
+
+    // If chapter.id is a URL (from scraper fallback), use the scraper pages endpoint
+    const chapterId = currentChapter.id;
+    fetch(`/api/manga/chapter/${encodeURIComponent(chapterId)}/pages?source=${source}`)
+      .then(r => r.json())
+      .then((data: string[]) => {
         if (data && data.length > 0) {
           setPages(data);
-          setCurrentPage(0);
+          setStatusText('');
         } else {
           setStatusText('No pages found for this chapter.');
         }
-      });
-    }
+      }).catch(() => setStatusText('Failed to load pages.'));
   }, [currentChapter]);
 
+  // Save progress
   useEffect(() => {
-    if (pages.length > 0 && pages[currentPage] && overlayActive) {
-      setStatusText('Translating page with Gemini Vision...');
+    if (!manga || !currentChapter || pages.length === 0) return;
+    if (progressTimerRef.current) clearTimeout(progressTimerRef.current);
+    progressTimerRef.current = setTimeout(() => {
+      if (session?.access_token) {
+        fetch('/api/progress', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mangaId: manga.id, mangaTitle: manga.title, chapterId: currentChapter.id, chapterNumber: currentChapter.chapter, pageIndex: currentPage, totalPages: pages.length })
+        }).catch(() => { });
+      }
+      // Check end of chapter
+      setEndOfChapter(currentPage === pages.length - 1);
+    }, 800);
+
+    // Clear translations immediately when page or chapter changes to prevent leakage
+    setTranslations([]);
+    setStatusText('');
+
+    return () => clearTimeout(progressTimerRef.current);
+  }, [currentPage, currentChapter, pages.length]);
+
+  // Translate current page
+  useEffect(() => {
+    if (!manga || pages.length === 0 || !translationEnabled) {
       setTranslations([]);
-      fetch('/api/ai/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: pages[currentPage] })
-      }).then(res => res.json()).then(data => {
-        if (data.translations) setTranslations(data.translations);
-        setStatusText('');
-      }).catch(err => {
-        setStatusText('Translation failed.');
-      });
-    } else {
-      setStatusText('');
+      return;
     }
-  }, [pages, currentPage, overlayActive]);
+
+    let isAborted = false;
+
+    const translatePage = async () => {
+      setOverlayActive(true);
+      setOcrProgress(0);
+      setStatusText('Extracting text (PaddleOCR AI)...');
+
+      try {
+        let prog = 0;
+        const progInterval = setInterval(() => {
+          prog = Math.min(95, prog + Math.random() * 15);
+          setOcrProgress(Math.floor(prog));
+        }, 400);
+
+        const ocrRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/ai/ocr-paddle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: pages[currentPage],
+            lang: ocrLanguage
+          })
+        });
+
+        clearInterval(progInterval);
+        setOcrProgress(100);
+
+        if (isAborted) return;
+        if (!ocrRes.ok) throw new Error('OCR failed');
+
+        const { blocks, error } = await ocrRes.json();
+        if (error) throw new Error(error);
+
+        if (!blocks || blocks.length === 0) {
+          setStatusText('');
+          setTranslations([]);
+          return;
+        }
+
+        setStatusText('Translating Script...');
+        const transRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/ai/translate-only`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            texts: blocks.map(b => b.text),
+            targetLanguage,
+            sourceLanguage: ocrLanguage // Explicitly pass the OCR language as source
+          })
+        });
+
+        if (isAborted) return;
+        if (!transRes.ok) throw new Error('Translation failed');
+
+        const { translations: translatedList } = await transRes.json();
+
+        const finalTranslations = blocks.map((b, i) => ({
+          id: i + 1,
+          original: b.text,
+          translated: translatedList[i] || b.text,
+          x: b.x,
+          y: b.y,
+          width: b.width,
+          height: b.height
+        }));
+
+        setTranslations(finalTranslations);
+        setStatusText('');
+      } catch (err: any) {
+        if (!isAborted) {
+          console.error('[TranslatePage] Error:', err);
+          setStatusText('⚠️ Error: ' + err.message);
+        }
+      }
+    };
+
+    translatePage();
+    return () => { isAborted = true; };
+  }, [pages, currentPage, manga, targetLanguage, translationEnabled, refreshTrigger, ocrLanguage]);
+
+  const isTranslating = statusText && !statusText.includes('Ready') && statusText !== '';
+
+  const checkNavigation = () => {
+    // Automatically cut off/clean up is handled by useEffect dependency changes
+    return true;
+  };
+
+  const goNextChapter = () => {
+    if (!checkNavigation()) return;
+    if (chapterIndex < chapters.length - 1) {
+      const next = chapterIndex + 1;
+      setChapterIndex(next);
+      setCurrentChapter(chapters[next]);
+      setCurrentPage(0);
+      setEndOfChapter(false);
+    }
+  };
+  const goPrevChapter = () => {
+    if (!checkNavigation()) return;
+    if (chapterIndex > 0) {
+      const prev = chapterIndex - 1;
+      setChapterIndex(prev);
+      setCurrentChapter(chapters[prev]);
+      setCurrentPage(0);
+    }
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (!checkNavigation()) return;
+    setCurrentPage(newPage);
+  };
+
+  const handleLangChange = (lang: string) => {
+    setTargetLanguage(lang);
+    localStorage.setItem('manga_target_lang', lang);
+    setShowLangPicker(false);
+  };
+
 
   return (
     <div className="flex h-screen overflow-hidden pt-16">
@@ -1040,7 +1379,10 @@ const Reader = ({ setView, manga }: { setView: (v: View) => void, manga: Manga |
           {chapters.map(ch => (
             <button
               key={ch.id}
-              onClick={() => setCurrentChapter(ch)}
+              onClick={() => {
+                if (!checkNavigation()) return;
+                setCurrentChapter(ch);
+              }}
               className={`w-full text-left flex items-center justify-between p-3 rounded-lg transition-colors border ${currentChapter?.id === ch.id
                 ? 'bg-primary/20 border-primary/30 group'
                 : 'hover:bg-card-dark border-transparent'
@@ -1071,57 +1413,71 @@ const Reader = ({ setView, manga }: { setView: (v: View) => void, manga: Manga |
       {/* Main Viewer */}
       <section className="flex-1 bg-background-dark relative overflow-y-auto flex justify-center custom-scrollbar">
         <div className="w-full max-w-4xl py-8 px-4 md:px-0 flex flex-col gap-4 items-center">
-          <div className="relative w-full aspect-[2/3] max-w-[800px] shadow-2xl rounded-sm overflow-hidden bg-surface-dark flex items-center justify-center">
+          <div className="relative inline-block shadow-2xl rounded-sm overflow-hidden bg-surface-dark">
             {pages.length > 0 ? (
               <img
                 src={pages[currentPage]}
                 alt="Manga Page"
-                className="w-full h-full object-contain"
+                className="max-w-full max-h-[85vh] object-contain block"
                 referrerPolicy="no-referrer"
                 loading="eager"
+                onLoad={(e) => setImageScale({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
               />
             ) : (
-              <div className="text-slate-500 flex flex-col items-center">
+              <div className="text-slate-500 flex flex-col items-center py-32">
                 <RefreshCw size={32} className="animate-spin mb-4 text-primary" />
-                <p>{statusText || 'Loading...'}</p>
+                <p>Analyzing Page Layout...</p>
               </div>
             )}
 
-            {/* Overlays */}
+            {/* Script Markers */}
             {overlayActive && pages.length > 0 && translations.map((t, idx) => {
-              // Create randomized positions for the dummy bubbles just to show them, since Gemini Vision doesn't cleanly return bounding boxes yet without heavy prompting.
-              const top = 15 + (idx * 25) % 60;
-              const left = 10 + (idx * 30) % 70;
+              const left = (t.x / imageScale.w) * 100;
+              const top = (t.y / imageScale.h) * 100;
+              const isHovered = hoveredMarkerId === t.id;
+
               return (
                 <motion.div
                   key={idx}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
+                  initial={{ scale: 0 }}
+                  animate={{
+                    scale: 1,
+                    boxShadow: isHovered ? '0 0 20px #7c3aed, 0 0 40px #7c3aed' : 'none',
+                    backgroundColor: isHovered ? '#7c3aed' : 'rgba(124, 58, 237, 0.8)'
+                  }}
                   style={{ top: `${top}%`, left: `${left}%` }}
-                  className="absolute w-[25%] h-auto min-h-[10%] group cursor-help z-20"
+                  onMouseEnter={() => setHoveredMarkerId(t.id)}
+                  onMouseLeave={() => setHoveredMarkerId(null)}
+                  className="absolute z-20 w-5 h-5 -ml-2.5 -mt-2.5 flex items-center justify-center rounded-full text-[10px] font-black text-white cursor-help border-2 border-white/50 backdrop-blur-sm"
                 >
-                  <div className="text-center font-bold text-black bg-white p-2 rounded-2xl shadow-lg shadow-black/50 text-[11px] leading-tight w-full h-full flex items-center justify-center border-2 border-black">
-                    {t.translated}
-                  </div>
-                  <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-48 bg-slate-900 text-white text-[10px] p-3 rounded-lg shadow-xl border border-primary/30 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                    <div className="font-bold text-sm mb-1">{t.original}</div>
-                    <div className="text-primary flex items-center gap-1 mt-2">
-                      <Zap size={10} /> Neural Translated
-                    </div>
-                  </div>
+                  {t.id}
                 </motion.div>
               );
             })}
           </div>
 
-          {/* Controls */}
-          <div className="sticky bottom-6 flex items-center gap-4 bg-surface-dark/90 backdrop-blur-md border border-white/10 rounded-full px-6 py-2 shadow-2xl z-30">
-            <button onClick={() => setCurrentPage(0)} disabled={currentPage === 0} className="p-2 hover:bg-white/5 rounded-full text-white transition-colors disabled:opacity-30"><ChevronsLeft size={20} /></button>
-            <button onClick={() => setCurrentPage(p => Math.max(0, p - 1))} disabled={currentPage === 0} className="p-2 hover:bg-white/5 rounded-full text-white transition-colors disabled:opacity-30"><ChevronLeft size={20} /></button>
-            <span className="text-sm font-bold text-white px-2">Page {pages.length ? currentPage + 1 : 0}</span>
-            <button onClick={() => setCurrentPage(p => Math.min(pages.length - 1, p + 1))} disabled={currentPage === pages.length - 1} className="p-2 hover:bg-white/5 rounded-full text-white transition-colors disabled:opacity-30"><ChevronRight size={20} /></button>
-            <div className="h-6 w-px bg-white/10 mx-1"></div>
-            <button className="p-2 hover:bg-white/5 rounded-full text-white transition-colors"><ZoomIn size={20} /></button>
+          {endOfChapter && chapterIndex < chapters.length - 1 && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-[800px] bg-primary/10 border border-primary/30 rounded-2xl p-8 text-center">
+              <SkipForward size={32} className="text-primary mx-auto mb-3" />
+              <h3 className="text-white font-bold text-xl mb-2">Chapter Complete!</h3>
+              <p className="text-slate-400 text-sm mb-6">Ready for Chapter {chapters[chapterIndex + 1]?.chapter}?</p>
+              <button onClick={goNextChapter} className="bg-primary text-white font-bold px-8 py-3 rounded-xl hover:bg-primary/90 transition-all">Next Chapter →</button>
+            </motion.div>
+          )}
+          <div className="sticky bottom-6 flex items-center gap-2 bg-surface-dark/90 backdrop-blur-md border border-white/10 rounded-full px-4 py-2 shadow-2xl z-30 flex-wrap justify-center">
+            <button onClick={goPrevChapter} disabled={chapterIndex === 0} className="p-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition-colors disabled:opacity-30 flex items-center text-[11px] font-bold"><ChevronLeft size={14} />Ch</button>
+            <button onClick={() => handlePageChange(0)} disabled={currentPage === 0} className="p-2 hover:bg-white/5 rounded-full text-white transition-colors disabled:opacity-30"><ChevronsLeft size={20} /></button>
+            <button onClick={() => handlePageChange(Math.max(0, currentPage - 1))} disabled={currentPage === 0} className="p-2 hover:bg-white/5 rounded-full text-white transition-colors disabled:opacity-30"><ChevronLeft size={20} /></button>
+            <span className="text-xs font-bold text-white px-2 whitespace-nowrap">Ch {currentChapter?.chapter || '?'} · {pages.length ? currentPage + 1 : 0}/{pages.length}</span>
+            <button onClick={() => handlePageChange(Math.min(pages.length - 1, currentPage + 1))} disabled={currentPage === pages.length - 1} className="p-2 hover:bg-white/5 rounded-full text-white transition-colors disabled:opacity-30"><ChevronRight size={20} /></button>
+            <button onClick={goNextChapter} disabled={chapterIndex >= chapters.length - 1} className="p-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition-colors disabled:opacity-30 flex items-center text-[11px] font-bold">Ch<ChevronRight size={14} /></button>
+            <div className="h-6 w-px bg-white/10 mx-1" />
+            <button onClick={() => setOverlayActive(!overlayActive)} className={`p-2 hover:bg-white/5 rounded-full transition-colors ${overlayActive ? 'text-primary' : 'text-slate-400'}`}><Brain size={20} /></button>
+            <div className="h-6 w-px bg-white/10 mx-1" />
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-full border border-white/10">
+              <Globe size={14} className="text-primary" />
+              <span className="text-[11px] font-bold text-white">{targetLanguage}</span>
+            </div>
           </div>
         </div>
       </section>
@@ -1136,78 +1492,156 @@ const Reader = ({ setView, manga }: { setView: (v: View) => void, manga: Manga |
           <p className="text-xs text-gray-500">Real-time text replacement active</p>
         </div>
 
-        <div className="p-5 flex-1 overflow-y-auto space-y-8 custom-scrollbar">
-          <div className="space-y-3">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Translation Engine</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button className="flex flex-col items-center justify-center p-3 rounded-lg bg-primary border border-primary text-white shadow-lg shadow-primary/20">
-                <Brain size={20} className="mb-1" />
-                <span className="text-[10px] font-bold">GPT-4 Turbo</span>
-              </button>
-              <button className="flex flex-col items-center justify-center p-3 rounded-lg bg-card-dark border border-transparent text-gray-400 hover:border-gray-600 hover:text-white transition-all">
-                <Languages size={20} className="mb-1" />
-                <span className="text-[10px] font-bold">DeepL Pro</span>
-              </button>
-            </div>
-          </div>
-
+        <div className="p-5 flex-1 overflow-y-auto space-y-6 custom-scrollbar">
           <div className="space-y-4">
-            <div>
-              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 block">Source Language</label>
-              <div className="flex items-center justify-between w-full bg-background-dark border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                  <span>Auto-Detect (JP)</span>
-                </div>
-                <ChevronRight size={14} className="rotate-90 text-gray-500" />
-              </div>
-            </div>
-            <div className="flex justify-center -my-2 relative z-10">
-              <div className="bg-surface-dark p-1 rounded-full border border-white/10">
-                <ArrowDown size={14} className="text-gray-500" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 block">Target Language</label>
-              <div className="flex items-center justify-between w-full bg-background-dark border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white">
-                <div className="flex items-center gap-2">
-                  <Flag size={14} />
-                  <span>English (US)</span>
-                </div>
-                <ChevronRight size={14} className="rotate-90 text-gray-500" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-card-dark rounded-xl p-4 border border-white/10">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium text-white">Live Overlay</span>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Translation Pipeline</label>
               <button
-                onClick={() => setOverlayActive(!overlayActive)}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${overlayActive ? 'bg-primary' : 'bg-slate-700'}`}
+                onClick={() => setTranslationEnabled(!translationEnabled)}
+                className={`w-10 h-5 rounded-full relative transition-colors ${translationEnabled ? 'bg-primary' : 'bg-slate-700'}`}
               >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${overlayActive ? 'translate-x-6' : 'translate-x-1'}`}></span>
+                <div className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform ${translationEnabled ? 'left-5' : 'left-1'}`} />
               </button>
             </div>
-            <p className="text-[11px] text-gray-400 leading-relaxed">
-              Instantly replaces text bubbles. Toggle off to see original raw scans.
-            </p>
-          </div>
 
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs">
-              <span className="text-gray-400">Translation Confidence</span>
-              <span className="text-primary font-bold">94%</span>
+            <div className={`flex flex-col gap-4 transition-all ${translationEnabled ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
+              {/* Language Configuration (Collapsible) */}
+              <div className="rounded-xl bg-card-dark border border-white/10 overflow-hidden">
+                <button
+                  onClick={() => setShowLangPicker(!showLangPicker)}
+                  className="w-full flex items-center justify-between p-3 hover:bg-white/5 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Globe size={14} className="text-primary" />
+                    <span className="text-xs font-bold text-white">Target: {targetLanguage}</span>
+                  </div>
+                  <ArrowDown size={14} className={`text-gray-500 transition-transform ${showLangPicker ? 'rotate-180' : ''}`} />
+                </button>
+
+                <AnimatePresence>
+                  {showLangPicker && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="border-t border-white/5 bg-surface-dark px-1 py-1 max-h-48 overflow-y-auto"
+                    >
+                      <div className="grid grid-cols-2 gap-1 p-1">
+                        {LANGUAGES.map(lang => (
+                          <button
+                            key={lang}
+                            onClick={() => handleLangChange(lang)}
+                            className={`px-3 py-1.5 rounded-lg text-left text-[11px] font-medium transition-colors ${targetLanguage === lang ? 'bg-primary text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'
+                              }`}
+                          >
+                            {lang}
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <div className="rounded-xl bg-card-dark border border-white/10 p-3 space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Show Script</span>
+                  <button
+                    onClick={() => setShowScript(!showScript)}
+                    className={`w-10 h-5 rounded-full relative transition-colors ${showScript ? 'bg-primary' : 'bg-slate-700'}`}
+                  >
+                    <div className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform ${showScript ? 'left-5' : 'left-1'}`} />
+                  </button>
+                </div>
+                <div className="h-px bg-white/5" />
+                <div className="flex flex-col gap-2">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Source Language</span>
+                  <div className="flex gap-1">
+                    {[
+                      { id: 'japan', label: 'JPN' },
+                      { id: 'ch', label: 'CHI' },
+                      { id: 'korean', label: 'KOR' }
+                    ].map(lang => (
+                      <button
+                        key={lang.id}
+                        onClick={() => setOcrLanguage(lang.id)}
+                        className={`flex-1 py-1.5 rounded text-[10px] font-bold transition-all border ${ocrLanguage === lang.id ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-slate-500 border-transparent hover:text-white'
+                          }`}
+                      >
+                        {lang.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {statusText && (
+                <div className="p-3 rounded-lg bg-surface-dark border border-white/5 space-y-2">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-300 font-medium flex items-center gap-2">
+                      <RefreshCw size={12} className="animate-spin text-primary" />
+                      {statusText}
+                    </span>
+                    <span className="text-primary font-bold">{ocrProgress}%</span>
+                  </div>
+                  <div className="h-1 w-full bg-background-dark rounded-full overflow-hidden">
+                    <div className="h-full bg-primary transition-all duration-300" style={{ width: `${ocrProgress}%` }}></div>
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="h-1.5 w-full bg-background-dark rounded-full overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-primary to-purple-400 w-[94%] rounded-full"></div>
-            </div>
+
+            {showScript && translations.length > 0 && (
+              <div className="mt-6 space-y-3">
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                    <ScrollText size={12} /> Transcript
+                  </h3>
+                  <span className="text-[10px] text-primary bg-primary/10 px-2 py-0.5 rounded-full font-bold">{translations.length} lines</span>
+                </div>
+                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                  {translations.map((t) => (
+                    <motion.div
+                      key={t.id}
+                      onMouseEnter={() => setHoveredMarkerId(t.id)}
+                      onMouseLeave={() => setHoveredMarkerId(null)}
+                      className={`p-3 rounded-xl border transition-all cursor-default relative group ${hoveredMarkerId === t.id
+                        ? 'bg-primary/10 border-primary/30'
+                        : 'bg-card-dark border-white/5 hover:border-white/20'
+                        }`}
+                    >
+                      <div className="absolute -left-1 top-3 w-4 h-4 bg-primary text-[9px] font-black text-white rounded-full flex items-center justify-center border border-white/20">
+                        {t.id}
+                      </div>
+                      <div className="pl-3 space-y-2">
+                        <div className="text-[11px] text-slate-400 italic leading-snug line-clamp-2 group-hover:line-clamp-none">
+                          "{t.original}"
+                        </div>
+                        <div className="text-xs text-white font-medium leading-relaxed border-t border-white/5 pt-2">
+                          {t.translated}
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="p-5 border-t border-white/10">
-          <button className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border border-white/10 hover:border-primary/50 hover:bg-card-dark text-white transition-all text-sm font-medium group">
-            <RotateCcw size={18} className="group-hover:rotate-180 transition-transform duration-500" />
+        <div className="p-5 border-t border-white/10 space-y-4">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-xs font-medium text-slate-400">Live Overlay</span>
+            <button
+              onClick={() => setOverlayActive(!overlayActive)}
+              className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors ${overlayActive ? 'bg-primary' : 'bg-slate-700'}`}
+            >
+              <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${overlayActive ? 'translate-x-5' : 'translate-x-1'}`}></span>
+            </button>
+          </div>
+
+          <button onClick={() => setRefreshTrigger(t => t + 1)} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white transition-all text-sm font-medium border border-white/5 hover:border-white/10">
+            <RotateCcw size={16} />
             Regenerate Page
           </button>
         </div>
@@ -1219,6 +1653,9 @@ const Reader = ({ setView, manga }: { setView: (v: View) => void, manga: Manga |
 const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void }) => {
   const [username, setUsername] = useState(user.user_metadata?.username || '');
   const [avatarUrl, setAvatarUrl] = useState(user.user_metadata?.avatar_url || '');
+  const [bio, setBio] = useState('');
+  const [website, setWebsite] = useState('');
+  const [location, setLocation] = useState('');
   const [favoriteTags, setFavoriteTags] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState('');
   const [hasExistingKey, setHasExistingKey] = useState(false);
@@ -1229,9 +1666,12 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
   const AVAILABLE_TAGS = ['Action', 'Romance', 'Comedy', 'Horror', 'Sci-Fi', 'Fantasy', 'Slice of Life', 'Mystery', 'Drama', 'Sports'];
 
   useEffect(() => {
-    supabase.from('profiles').select('favorite_tags').eq('id', user.id).single()
+    supabase.from('profiles').select('favorite_tags, bio, website, location').eq('id', user.id).single()
       .then(({ data }) => {
         if (data?.favorite_tags) setFavoriteTags(data.favorite_tags);
+        if (data?.bio) setBio(data.bio);
+        if (data?.website) setWebsite(data.website);
+        if (data?.location) setLocation(data.location);
       });
 
     // Check if user has an API Key in Vault
@@ -1267,13 +1707,12 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
   const handleRemoveKey = async () => {
     setKeyLoading(true);
     try {
-      const { error: deleteMapError } = await supabase.from('user_keys_map').delete().eq('user_id', user.id);
-      if (deleteMapError) throw deleteMapError;
-
+      const { error } = await supabase.rpc('remove_user_api_key');
+      if (error) throw error;
       setHasExistingKey(false);
       setMessage({ text: 'API Key removed.', type: 'success' });
     } catch (err: any) {
-      setMessage({ text: 'Error removing key.', type: 'error' });
+      setMessage({ text: err.message || 'Error removing key.', type: 'error' });
     }
     setKeyLoading(false);
   };
@@ -1292,7 +1731,10 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
     });
 
     const { error: profileError } = await supabase.from('profiles').update({
-      favorite_tags: favoriteTags
+      favorite_tags: favoriteTags,
+      bio,
+      website,
+      location
     }).eq('id', user.id);
 
     if (authError || profileError) {
@@ -1353,6 +1795,39 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
               />
               <p className="text-xs text-slate-500 mt-1">Email cannot be changed.</p>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-bold text-slate-300 mb-2 uppercase tracking-wider">Website</label>
+              <input
+                type="url"
+                value={website}
+                onChange={(e) => setWebsite(e.target.value)}
+                className="w-full bg-background-dark border border-white/10 rounded-xl py-3 px-4 text-white focus:ring-2 focus:ring-primary outline-none transition-all"
+                placeholder="https://gycodes.dev"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-300 mb-2 uppercase tracking-wider">Location</label>
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                className="w-full bg-background-dark border border-white/10 rounded-xl py-3 px-4 text-white focus:ring-2 focus:ring-primary outline-none transition-all"
+                placeholder="Neo Tokyo"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-slate-300 mb-2 uppercase tracking-wider">Bio</label>
+            <textarea
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              className="w-full bg-background-dark border border-white/10 rounded-xl py-3 px-4 text-white focus:ring-2 focus:ring-primary outline-none transition-all h-24 resize-none"
+              placeholder="Tell us about yourself..."
+            />
           </div>
 
           <div>
@@ -1463,7 +1938,7 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
   );
 };
 
-const AdminDashboard = ({ setView }: { setView: (v: View) => void }) => {
+const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: User | null }) => {
   const [primaryColor, setPrimaryColor] = useState('#8b5cf6');
   const [backgroundDark, setBackgroundDark] = useState('#191022');
   const [users, setUsers] = useState<any[]>([]);
@@ -1481,9 +1956,13 @@ const AdminDashboard = ({ setView }: { setView: (v: View) => void }) => {
 
   const saveSettings = async () => {
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
       const res = await fetch('/api/admin/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ primary_color: primaryColor, background_dark: backgroundDark, theme_mode: 'dark' })
       });
       if (res.ok) {
@@ -1499,7 +1978,9 @@ const AdminDashboard = ({ setView }: { setView: (v: View) => void }) => {
   const fetchUsers = async () => {
     setLoadingUsers(true);
     try {
-      const res = await fetch('/api/admin/users');
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
+      const res = await fetch('/api/admin/users', { headers });
       if (res.ok) setUsers(await res.json());
     } catch (err) {
       console.error(err);
@@ -1510,7 +1991,9 @@ const AdminDashboard = ({ setView }: { setView: (v: View) => void }) => {
   const handleDeleteUser = async (id: string, email: string) => {
     if (!confirm(`Are you sure you want to delete ${email}?`)) return;
     try {
-      const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
+      const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE', headers });
       if (res.ok) {
         setUsers(users.filter(u => u.id !== id));
       } else {
@@ -1635,6 +2118,8 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<'user' | 'admin'>('user');
+  const [selectedSource, setSelectedSource] = useState<'mangadex' | 'mangakakalot'>('mangadex');
+  const [favoriteGenres, setFavoriteGenres] = useState<string[]>([]);
 
   useEffect(() => {
     // Fetch Global Site Settings
@@ -1679,21 +2164,44 @@ export default function App() {
   const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
 
   useEffect(() => {
-    fetch('/api/manga/trending')
-      .then(res => res.json())
-      .then(data => setTrendingManga(data))
-      .catch(console.error);
+    const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
 
-    fetch('/api/tasks/active')
-      .then(res => res.json())
-      .then(data => setTasks(data))
-      .catch(console.error);
+    // Stale-while-revalidate: serve cached trending instantly, then refresh
+    const cached = localStorage.getItem('manga_trending_cache');
+    if (cached) {
+      try { setTrendingManga(JSON.parse(cached)); } catch (_) { }
+    }
 
-    fetch('/api/history')
-      .then(res => res.json())
-      .then(data => setHistoryList(data))
-      .catch(console.error);
-  }, []);
+    // Fetch favorite genres from profile to personalize Explore page
+    const loadData = async () => {
+      let genreParams = '';
+      if (session?.access_token && session.user) {
+        try {
+          const { data: profile } = await supabase.from('profiles').select('favorite_tags').eq('id', session.user.id).single();
+          if (profile?.favorite_tags?.length) {
+            setFavoriteGenres(profile.favorite_tags);
+            genreParams = `?genres=${encodeURIComponent(profile.favorite_tags.join(','))}`;
+          }
+        } catch (_) { }
+      }
+
+      // Parallel fetch all startup data
+      const [trendingRes, tasksRes, historyRes] = await Promise.allSettled([
+        fetch(`/api/manga/trending${genreParams}`).then(r => r.json()),
+        fetch('/api/tasks/active', { headers }).then(r => r.json()),
+        fetch('/api/history', { headers }).then(r => r.json()),
+      ]);
+
+      if (trendingRes.status === 'fulfilled' && Array.isArray(trendingRes.value)) {
+        setTrendingManga(trendingRes.value);
+        localStorage.setItem('manga_trending_cache', JSON.stringify(trendingRes.value));
+      }
+      if (tasksRes.status === 'fulfilled' && Array.isArray(tasksRes.value)) setTasks(tasksRes.value);
+      if (historyRes.status === 'fulfilled' && Array.isArray(historyRes.value)) setHistoryList(historyRes.value);
+    };
+
+    loadData().catch(console.error);
+  }, [session]);
 
   useEffect(() => {
     if (!searchQuery.trim()) {
@@ -1717,9 +2225,12 @@ export default function App() {
   const handleImportUrl = async (url: string) => {
     try {
       addToast('Starting import...', 'info');
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
       const res = await fetch('/api/import/url', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ url }),
       });
       const data = await res.json();
@@ -1728,6 +2239,35 @@ export default function App() {
       addToast(`Import started: ${data.task.title}`, 'success');
     } catch (err: any) {
       addToast(err.message || 'Failed to start import', 'error');
+    }
+  };
+
+  const handleAddToLibrary = async (manga: Manga) => {
+    if (!user) {
+      setView('login');
+      return;
+    }
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
+      const res = await fetch('/api/library', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          mangaId: manga.id,
+          title: manga.title,
+          cover: manga.cover,
+          genre: manga.genre,
+          rating: manga.rating,
+          status: manga.status,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to add to library');
+      addToast('Added to library!', 'success');
+    } catch (err: any) {
+      addToast(err.message, 'error');
     }
   };
 
@@ -1774,15 +2314,15 @@ export default function App() {
             exit={{ opacity: 0, x: -10 }}
             transition={{ duration: 0.2 }}
           >
-            {view === 'landing' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} />}
+            {view === 'landing' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />}
             {view === 'dashboard' && (user ? <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} /> : <LoginPage setView={setView} />)}
-            {view === 'reader' && <Reader setView={setView} manga={selectedManga} />}
-            {view === 'library' && (user ? <LibraryPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} /> : <LoginPage setView={setView} />)}
+            {view === 'reader' && <Reader setView={setView} manga={selectedManga} session={session} source={selectedSource} />}
+            {view === 'library' && (user ? <LibraryPage setView={setView} onSelectManga={handleSelectManga} user={user} session={session} /> : <LoginPage setView={setView} />)}
             {view === 'login' && (!user ? <LoginPage setView={setView} /> : <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} />)}
             {view === 'signup' && (!user ? <SignupPage setView={setView} /> : <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} />)}
             {view === 'profile' && (user ? <ProfilePage user={user} setView={setView} /> : <LoginPage setView={setView} />)}
-            {view === 'admin' && (role === 'admin' ? <AdminDashboard setView={setView} /> : <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} />)}
-            {view === 'detail' && selectedManga && <MangaDetailPage manga={selectedManga} setView={setView} />}
+            {view === 'admin' && (role === 'admin' ? <AdminDashboard setView={setView} user={user} /> : <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />)}
+            {view === 'detail' && selectedManga && <MangaDetailPage manga={selectedManga} setView={setView} onAddToLibrary={handleAddToLibrary} source={selectedSource} setSource={setSelectedSource} />}
           </motion.div>
         </AnimatePresence>
       </main>
