@@ -51,12 +51,14 @@ import { supabase } from './lib/supabase';
 import { Session, User } from '@supabase/supabase-js';
 
 // --- State Interfaces ---
-type View = 'landing' | 'dashboard' | 'reader' | 'library' | 'login' | 'signup' | 'detail' | 'profile' | 'admin';
+type View = 'landing' | 'dashboard' | 'reader' | 'library' | 'login' | 'signup' | 'detail' | 'profile' | 'admin' | 'anime' | 'watch';
 
-interface Manga {
+export interface Manga {
   id: string;
   title: string;
   cover: string;
+  description?: string;
+  source: string;
   genre: string[];
   rating: number | string;
   status: string;
@@ -115,28 +117,32 @@ const ToastContainer = ({ toasts, removeToast }: { toasts: Toast[], removeToast:
 
 // --- Components ---
 
-const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, user, role }: {
+const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, user, role, isAnimeMode, setIsAnimeMode }: {
   currentView: View,
   setView: (v: View) => void,
   onUpload: (files: FileList) => void,
   searchQuery: string,
   setSearchQuery: (q: string) => void,
   user: User | null,
-  role: 'user' | 'admin'
+  role: 'user' | 'admin',
+  isAnimeMode: boolean,
+  setIsAnimeMode: (m: boolean) => void
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
-  // Only show search on Explore (landing) and Library pages
-  const searchAllowed = currentView === 'landing' || currentView === 'library';
+  // Only show search on Explore (landing/anime) and Library pages
+  const searchAllowed = currentView === 'landing' || currentView === 'library' || currentView === 'anime';
 
   return (
     <header className="fixed top-0 z-50 w-full border-b border-white/10 bg-[#191022]/85 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => setView('landing')}>
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/20 text-primary">
-            <Languages size={20} />
+            {isAnimeMode ? <Zap size={20} className="text-[#FF6B6B]" /> : <Languages size={20} />}
           </div>
-          <span className="text-xl font-bold tracking-tight text-white hidden sm:block">MangaTranslate</span>
+          <span className="text-xl font-bold tracking-tight text-white hidden sm:block">
+            MangaTranslate
+          </span>
         </div>
 
         <div className="flex items-center gap-4 flex-1 justify-end md:justify-center px-4">
@@ -180,6 +186,25 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
               </AnimatePresence>
             </motion.div>
           )}
+
+          {/* Anime Mode Toggle */}
+          <div className="hidden lg:flex items-center gap-3 px-4 py-1.5 rounded-full bg-white/5 border border-white/10">
+            <span className={`text-xs font-bold transition-colors ${!isAnimeMode ? 'text-primary' : 'text-slate-500'}`}>MANGA</span>
+            <button
+              onClick={() => {
+                setIsAnimeMode(!isAnimeMode);
+                setView(!isAnimeMode ? 'anime' : 'landing');
+              }}
+              className="relative w-12 h-6 rounded-full bg-black/50 border border-white/20 p-1 transition-all"
+            >
+              <motion.div
+                className={`w-4 h-4 rounded-full ${isAnimeMode ? 'bg-[#FF6B6B]' : 'bg-primary'}`}
+                animate={{ x: isAnimeMode ? 24 : 0 }}
+                transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              />
+            </button>
+            <span className={`text-xs font-bold transition-colors ${isAnimeMode ? 'text-[#FF6B6B]' : 'text-slate-500'}`}>ANIME</span>
+          </div>
 
           <nav className={`flex items-center gap-4 md:gap-6 ${isSearchExpanded ? 'hidden md:flex' : 'flex'}`}>
             <button onClick={() => setView('landing')} className={`text-sm font-medium transition-colors ${currentView === 'landing' ? 'text-white border-b-2 border-primary pb-0.5' : 'text-slate-300 hover:text-white'}`}>Explore</button>
@@ -779,35 +804,27 @@ const LibraryPage = ({ setView, onSelectManga, user, session }: { setView: (v: V
   );
 };
 
-const MangaDetailPage = ({ manga, setView, onAddToLibrary, source, setSource }: { manga: Manga, setView: (v: View) => void, onAddToLibrary: (m: Manga) => void, source: 'mangadex' | 'mangakakalot', setSource: (s: 'mangadex' | 'mangakakalot') => void }) => {
-  const [summary, setSummary] = useState<string>('');
-  const [loading, setLoading] = useState(true);
+const MangaDetailPage = ({ manga, setView, onAddToLibrary, source, setSource, setWatchQuery }: { manga: Manga, setView: (v: View) => void, onAddToLibrary: (m: Manga) => void, source: 'mangadex' | 'mangabuddy', setSource: (s: 'mangadex' | 'mangabuddy') => void, setWatchQuery: (q: string) => void }) => {
+  const [chapters, setChapters] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const fetchSummary = async () => {
-      try {
-        const response = await fetch('/api/ai/summary', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: manga.title })
-        });
-        const data = await response.json();
-        if (!response.ok) {
-          setSummary(data.error || 'Failed to load AI summary.');
-        } else {
-          setSummary(data.summary || 'No summary available.');
-        }
-      } catch (error) {
-        console.error('Error fetching summary:', error);
-        setSummary('Failed to load AI summary.');
-      } finally {
-        setLoading(false);
+  const handleWatchAnime = async () => {
+    if (!manga?.title) return;
+    try {
+      const sanitizedTitle = manga.title.replace(/[^a-zA-Z0-9\s\-:]/g, ' ').replace(/\s+/g, ' ').trim();
+      const res = await fetch(`/api/anime/search?q=${encodeURIComponent(sanitizedTitle)}`);
+      const payload = await res.json();
+
+      if (payload && payload.length > 0) {
+        setWatchQuery(payload[0].animeId);
+        setView('watch');
+      } else {
+        alert("No Anime adaptation found for this title.");
       }
-    };
-    if (manga?.title) {
-      fetchSummary();
+    } catch (e) {
+      alert("Network Error checking Anime DB.");
     }
-  }, [manga]);
+  };
 
   return (
     <div className="pt-24 pb-12 px-4 sm:px-6 lg:px-8 mx-auto max-w-5xl">
@@ -853,8 +870,8 @@ const MangaDetailPage = ({ manga, setView, onAddToLibrary, source, setSource }: 
 
           <div className="bg-card-dark border border-white/10 rounded-2xl p-6 relative overflow-hidden">
             <div className="flex items-center gap-2 text-primary mb-4">
-              <Brain size={20} className={loading ? 'animate-pulse' : ''} />
-              <h3 className="font-bold uppercase tracking-wider text-sm">AI Summary</h3>
+              <BookOpen size={20} className={loading ? 'animate-pulse' : ''} />
+              <h3 className="font-bold uppercase tracking-wider text-sm">Description</h3>
             </div>
 
             {loading ? (
@@ -869,51 +886,54 @@ const MangaDetailPage = ({ manga, setView, onAddToLibrary, source, setSource }: 
                 animate={{ opacity: 1 }}
                 className="text-slate-300 leading-relaxed"
               >
-                {summary}
+                {manga.description || 'No description available for this manga.'}
               </motion.p>
             )}
-
-            <div className="absolute -right-4 -bottom-4 text-primary/5 rotate-12">
-              <Zap size={120} />
-            </div>
           </div>
 
-          <div className="flex flex-col gap-6">
-            <div className="flex gap-4">
-              <button
-                onClick={() => setView('reader')}
-                className="flex-1 bg-primary text-white font-bold py-4 rounded-xl shadow-lg hover:bg-primary/90 transition-all flex items-center justify-center gap-2 group"
-              >
-                <BookOpen size={20} className="group-hover:scale-110 transition-transform" />
-                Start Reading
-              </button>
-              <button
-                onClick={() => onAddToLibrary(manga)}
-                className="flex-1 bg-white/5 border border-white/10 text-white font-bold py-4 rounded-xl hover:bg-white/10 transition-colors flex items-center justify-center gap-2"
-              >
-                <Library size={20} />
-                Library
-              </button>
-            </div>
+          <div className="flex gap-4">
+            <button
+              onClick={() => setView('reader')}
+              className="flex-1 bg-primary text-white font-bold py-4 rounded-xl shadow-lg hover:bg-primary/90 transition-all flex items-center justify-center gap-2 group"
+            >
+              <BookOpen size={20} className="group-hover:scale-110 transition-transform" />
+              Start Reading
+            </button>
+            <button
+              onClick={() => onAddToLibrary(manga)}
+              className="flex-1 bg-white/5 border border-white/10 text-white font-bold py-4 rounded-xl hover:bg-white/10 transition-colors flex items-center justify-center gap-2"
+            >
+              <Library size={20} />
+              Library
+            </button>
+            <button
+              onClick={handleWatchAnime}
+              className="px-6 bg-[#FF6B6B]/10 border border-[#FF6B6B]/20 text-[#FF6B6B] font-bold py-4 rounded-xl hover:bg-[#FF6B6B]/20 transition-colors flex items-center justify-center gap-2 group"
+            >
+              <Zap size={20} className="group-hover:scale-110 transition-transform" />
+              Watch Anime
+            </button>
+          </div>
 
-            <div className="p-4 rounded-2xl bg-card-dark border border-white/5 space-y-3">
-              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block">Choose Provider Source</label>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { id: 'mangadex', name: 'MangaDex', icon: <Zap size={14} /> },
-                  { id: 'mangakakalot', name: 'Kakalot / Nato', icon: <Search size={14} /> }
-                ].map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => setSource(s.id as any)}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-xs font-bold transition-all ${source === s.id ? 'bg-primary/20 border-primary text-white ring-1 ring-primary/30' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
-                      }`}
-                  >
-                    {s.icon}
-                    {s.name}
-                  </button>
-                ))}
-              </div>
+
+
+          <div className="p-4 rounded-2xl bg-card-dark border border-white/5 space-y-3">
+            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block">Choose Provider Source</label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { id: 'mangadex', name: 'MangaDex', icon: <Zap size={14} /> },
+                { id: 'mangabuddy', name: 'MangaBuddy', icon: <Search size={14} /> }
+              ].map(s => (
+                <button
+                  key={s.id}
+                  onClick={() => setSource(s.id as any)}
+                  className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-xs font-bold transition-all ${source === s.id ? 'bg-primary/20 border-primary text-white ring-1 ring-primary/30' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'
+                    }`}
+                >
+                  {s.icon}
+                  {s.name}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -1115,7 +1135,7 @@ const SignupPage = ({ setView }: { setView: (v: View) => void }) => {
 
 const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Portuguese', 'Italian', 'Indonesian', 'Malay', 'Thai', 'Vietnamese', 'Dutch', 'Polish', 'Russian', 'Arabic', 'Turkish'];
 
-const Reader = ({ setView, manga, session, source }: { setView: (v: View) => void, manga: Manga | null, session: any, source: 'mangadex' | 'mangakakalot' }) => {
+const Reader = ({ setView, manga, session, source }: { setView: (v: View) => void, manga: Manga | null, session: any, source: 'mangadex' | 'mangabuddy' }) => {
   const [chapters, setChapters] = useState<any[]>([]);
   const [chapterIndex, setChapterIndex] = useState(0);
   const [currentChapter, setCurrentChapter] = useState<any>(null);
@@ -1204,7 +1224,12 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
       .then(r => r.json())
       .then((data: string[]) => {
         if (data && data.length > 0) {
-          setPages(data);
+          if (source === 'mangabuddy') {
+            // Route MangaBuddy images through Node to spoof the referer and bypass HTTP 403 Forbidden
+            setPages(data.map(url => `/api/manga/image-proxy?url=${encodeURIComponent(url)}`));
+          } else {
+            setPages(data);
+          }
           setStatusText('');
         } else {
           setStatusText('No pages found for this chapter.');
@@ -1456,14 +1481,6 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
             })}
           </div>
 
-          {endOfChapter && chapterIndex < chapters.length - 1 && (
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-[800px] bg-primary/10 border border-primary/30 rounded-2xl p-8 text-center">
-              <SkipForward size={32} className="text-primary mx-auto mb-3" />
-              <h3 className="text-white font-bold text-xl mb-2">Chapter Complete!</h3>
-              <p className="text-slate-400 text-sm mb-6">Ready for Chapter {chapters[chapterIndex + 1]?.chapter}?</p>
-              <button onClick={goNextChapter} className="bg-primary text-white font-bold px-8 py-3 rounded-xl hover:bg-primary/90 transition-all">Next Chapter →</button>
-            </motion.div>
-          )}
           <div className="sticky bottom-6 flex items-center gap-2 bg-surface-dark/90 backdrop-blur-md border border-white/10 rounded-full px-4 py-2 shadow-2xl z-30 flex-wrap justify-center">
             <button onClick={goPrevChapter} disabled={chapterIndex === 0} className="p-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition-colors disabled:opacity-30 flex items-center text-[11px] font-bold"><ChevronLeft size={14} />Ch</button>
             <button onClick={() => handlePageChange(0)} disabled={currentPage === 0} className="p-2 hover:bg-white/5 rounded-full text-white transition-colors disabled:opacity-30"><ChevronsLeft size={20} /></button>
@@ -2106,10 +2123,214 @@ const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: U
   );
 };
 
+const WatchPage = ({ setView, watchQuery, setWatchQuery, addToast }: {
+  setView: (v: View) => void,
+  watchQuery: string,
+  setWatchQuery: (q: string) => void,
+  addToast: (msg: string, type?: Toast['type']) => void
+}) => {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [searchLocal, setSearchLocal] = useState('');
+  const [episodes, setEpisodes] = useState<any[]>([]);
+  const [currentEp, setCurrentEp] = useState<any>(null);
+  const [streamUrl, setStreamUrl] = useState<string>('');
+  const [streamLoading, setStreamLoading] = useState(false);
+
+  useEffect(() => {
+    if (!watchQuery) {
+      setLoading(false);
+      return;
+    }
+    const fetchMetadata = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        let effectiveId = watchQuery;
+        // Search first if it has spaces (from general search or prior logic)
+        if (effectiveId.includes(' ')) {
+          const sReq = await fetch(`/api/anime/search?q=${encodeURIComponent(watchQuery)}`);
+          const sRes = await sReq.json();
+          if (sRes?.length > 0) effectiveId = sRes[0].animeId;
+          else throw new Error("No anime found for this title.");
+        }
+
+        const res = await fetch(`/api/anime/details/${encodeURIComponent(effectiveId)}`);
+        const json = await res.json();
+
+        if (json && !json.error) {
+          setData(json);
+          const eplist = json.episodeList || json.info?.episodeList || [];
+          setEpisodes([...eplist].reverse()); // Sanka serves newest first, flip it for logical timeline
+          if (eplist.length > 0) setCurrentEp(eplist[eplist.length - 1]);
+        } else {
+          setData(null);
+          setError(json?.error?.toString() || 'We could not load adaptation details.');
+        }
+      } catch (err: any) {
+        setData(null);
+        setError(err?.message?.toString() || 'Network error resolving Anime database.');
+      }
+      setLoading(false);
+    };
+    fetchMetadata();
+  }, [watchQuery]);
+
+  useEffect(() => {
+    if (!currentEp) return;
+    const fetchStream = async () => {
+      setStreamLoading(true);
+      setStreamUrl('');
+      try {
+        const res = await fetch(`/api/anime/stream/${encodeURIComponent(currentEp.episodeId)}`);
+        const sjson = await res.json();
+        if (sjson?.streamUrl) {
+          setStreamUrl(sjson.streamUrl);
+        } else if (sjson?.error) {
+          addToast(sjson.error, 'error');
+        } else {
+          addToast("Streaming link unavailable for this episode.", 'error');
+        }
+      } catch (err) {
+        addToast("Network error fetching stream.", 'error');
+      }
+      setStreamLoading(false);
+    };
+    fetchStream();
+  }, [currentEp]);
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (searchLocal.trim()) setWatchQuery(searchLocal.trim());
+  };
+
+  return (
+    <div className="pt-24 pb-12 px-4 sm:px-6 lg:px-8 mx-auto max-w-7xl font-display">
+      <div className="flex items-center justify-between mb-8">
+        <button
+          onClick={() => setView('anime')}
+          className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors"
+        >
+          <ChevronLeft size={20} /> Back to Anime Home
+        </button>
+        <form onSubmit={handleSearch} className="relative w-full max-w-sm">
+          <input
+            type="text"
+            value={searchLocal}
+            onChange={(e) => setSearchLocal(e.target.value)}
+            placeholder="Search anime..."
+            className="w-full bg-black/40 border border-white/10 rounded-full py-2 pl-4 pr-10 text-sm text-white focus:outline-none focus:border-[#FF6B6B]/50 transition-colors"
+          />
+          <button type="submit" className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#FF6B6B]">
+            <Search size={16} />
+          </button>
+        </form>
+      </div>
+
+      {loading ? (
+        <div className="flex flex-col items-center justify-center py-40">
+          <Zap size={40} className="text-[#FF6B6B] animate-pulse mb-4" />
+          <h2 className="text-xl font-bold text-white">Synthesizing Anime Data...</h2>
+        </div>
+      ) : error ? (
+        <div className="text-center py-40 bg-card-dark rounded-3xl border border-white/5 border-dashed">
+          <AlertCircle size={40} className="mx-auto text-slate-500 mb-4" />
+          <p className="text-xl font-bold text-white mb-2">{error}</p>
+          <button onClick={() => setView('anime')} className="text-[#FF6B6B] hover:underline mt-4">Browse Trending</button>
+        </div>
+      ) : data ? (
+        <div className="space-y-8">
+          {/* Main Player Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 shadow-2xl">
+              <div className="aspect-video bg-black rounded-t-2xl overflow-hidden shadow-2xl ring-1 ring-white/10 relative group">
+                {streamUrl ? (
+                  <iframe
+                    src={streamUrl}
+                    className="w-full h-full border-0 absolute top-0 left-0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-card-dark border-b border-white/10">
+                    <Zap size={40} className={`text-slate-600 mb-4 ${streamLoading ? 'animate-pulse text-[#FF6B6B]' : ''}`} />
+                    <p className="text-slate-400 font-bold">{streamLoading ? "Loading Stream Proxy..." : "Select an episode below"}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Episodes Grid below player */}
+              <div className="bg-white/[0.02] border border-white/5 rounded-b-2xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-white flex items-center gap-2"><BookOpen size={18} className="text-[#FF6B6B]" /> Episodes</h3>
+                  <span className="text-xs font-bold text-slate-500 bg-black/40 px-3 py-1 rounded-full">{episodes.length} Available</span>
+                </div>
+                <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                  {episodes.map((ep: any) => (
+                    <button
+                      key={ep.episodeId}
+                      onClick={() => setCurrentEp(ep)}
+                      className={`p-2 rounded text-xs font-bold text-center border transition-all ${currentEp?.episodeId === ep.episodeId ? 'bg-[#FF6B6B]/20 text-[#FF6B6B] border-[#FF6B6B]/40 shadow-inner' : 'bg-black/40 text-slate-400 border-white/5 hover:bg-white/10 hover:text-white'}`}
+                    >
+                      EP {ep.eps || ep.title?.replace('Episode ', '') || '?'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6 pl-2">
+                <h1 className="text-3xl font-black text-white leading-tight">{data.title}</h1>
+                <p className="text-[#FF6B6B] font-bold mt-2 text-sm uppercase tracking-widest">{currentEp?.title || "No Episode Selected"}</p>
+                <div className="flex flex-wrap gap-3 mt-4">
+                  <span className="px-3 py-1 rounded-full bg-white/5 text-slate-300 text-xs font-bold border border-white/10">{data.status}</span>
+                  <span className="px-3 py-1 rounded-full bg-white/5 text-slate-300 text-xs font-bold border border-white/10">{data.info?.type || data.type || 'TV'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Side Panel: Details */}
+            <div className="lg:col-span-1 border border-white/5 bg-white/[0.02] rounded-2xl p-6 h-fit">
+              <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Library size={18} className="text-[#FF6B6B]" /> Media Metadata</h3>
+              <div className="flex items-center justify-center mb-6">
+                {data.poster && <img src={data.poster} alt={data.title} className="w-1/2 rounded-lg shadow-lg" />}
+              </div>
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between border-b border-white/5 pb-2">
+                  <span className="text-slate-500">Duration</span>
+                  <span className="text-slate-300 font-medium text-right">{data.info?.duration || data.duration || '?'}</span>
+                </div>
+                <div className="flex justify-between border-b border-white/5 pb-2">
+                  <span className="text-slate-500">Encoder / Studio</span>
+                  <span className="text-slate-300 font-medium">{data.info?.encoder || data.info?.credit || data.producers || data.studios || 'Unknown'}</span>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-white/5">
+                  {(data.info?.genreList || data.genreList || []).map((g: any) => (
+                    <span key={g.title} className="px-2 py-1 text-[10px] rounded bg-white/5 text-slate-400 capitalize">{g.title}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center py-40">
+          <BookCopy size={60} className="text-slate-600 mb-6" />
+          <h2 className="text-2xl font-bold text-white text-center">Ready to Sync</h2>
+          <p className="text-slate-400 text-center max-w-md mt-2">Enter an anime title in the search bar above to begin streaming episodes directly.</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function App() {
   const [view, setView] = useState<View>('landing');
+  const [isAnimeMode, setIsAnimeMode] = useState(false);
+  const [watchQuery, setWatchQuery] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [trendingManga, setTrendingManga] = useState<Manga[]>([]);
+  const [trendingAnime, setTrendingAnime] = useState<Manga[]>([]);
   const [searchResults, setSearchResults] = useState<Manga[]>([]);
   const [historyList, setHistoryList] = useState<HistoryItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -2118,7 +2339,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<'user' | 'admin'>('user');
-  const [selectedSource, setSelectedSource] = useState<'mangadex' | 'mangakakalot'>('mangadex');
+  const [selectedSource, setSelectedSource] = useState<'mangadex' | 'mangabuddy'>('mangadex');
   const [favoriteGenres, setFavoriteGenres] = useState<string[]>([]);
 
   useEffect(() => {
@@ -2162,6 +2383,17 @@ export default function App() {
   };
 
   const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
+
+  useEffect(() => {
+    if (isAnimeMode && trendingAnime.length === 0) {
+      fetch('/api/anime/trending')
+        .then(r => r.json())
+        .then(data => {
+          if (Array.isArray(data)) setTrendingAnime(data);
+        })
+        .catch(console.error);
+    }
+  }, [isAnimeMode]);
 
   useEffect(() => {
     const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
@@ -2217,9 +2449,30 @@ export default function App() {
     return () => clearTimeout(timeout);
   }, [searchQuery]);
 
-  const handleSelectManga = (manga: Manga) => {
+  const handleSelectManga = async (manga: Manga) => {
     setSelectedManga(manga);
-    setView('detail');
+    if (isAnimeMode && manga?.title) {
+      addToast('Verifying Anime Engine Data...', 'info');
+      try {
+        const sanitizedTitle = manga.title.replace(/[^a-zA-Z0-9\s\-:]/g, ' ').replace(/\s+/g, ' ').trim();
+        const res = await fetch(`/api/anime/search?q=${encodeURIComponent(sanitizedTitle)}`);
+        const payload = await res.json();
+
+        if (payload && payload.length > 0) {
+          const topResult = payload[0];
+          setWatchQuery(topResult.animeId);
+          setView('watch');
+        } else {
+          addToast("No Anime adaptation found for this title.", "error");
+          setView('detail');
+        }
+      } catch (e) {
+        addToast("Network Error checking Anime DB.", "error");
+        setView('detail');
+      }
+    } else {
+      setView('detail');
+    }
   };
 
   const handleImportUrl = async (url: string) => {
@@ -2302,7 +2555,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background-dark text-slate-100 font-display selection:bg-primary selection:text-white">
-      <Navbar currentView={view} setView={setView} onUpload={handleFileUpload} searchQuery={searchQuery} setSearchQuery={setSearchQuery} user={user} role={role} />
+      <Navbar currentView={view} setView={setView} onUpload={handleFileUpload} searchQuery={searchQuery} setSearchQuery={setSearchQuery} user={user} role={role} isAnimeMode={isAnimeMode} setIsAnimeMode={setIsAnimeMode} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
 
       <main className="min-h-screen">
@@ -2314,7 +2567,7 @@ export default function App() {
             exit={{ opacity: 0, x: -10 }}
             transition={{ duration: 0.2 }}
           >
-            {view === 'landing' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />}
+            {view === 'landing' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={isAnimeMode ? trendingAnime : trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />}
             {view === 'dashboard' && (user ? <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} /> : <LoginPage setView={setView} />)}
             {view === 'reader' && <Reader setView={setView} manga={selectedManga} session={session} source={selectedSource} />}
             {view === 'library' && (user ? <LibraryPage setView={setView} onSelectManga={handleSelectManga} user={user} session={session} /> : <LoginPage setView={setView} />)}
@@ -2322,7 +2575,9 @@ export default function App() {
             {view === 'signup' && (!user ? <SignupPage setView={setView} /> : <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} />)}
             {view === 'profile' && (user ? <ProfilePage user={user} setView={setView} /> : <LoginPage setView={setView} />)}
             {view === 'admin' && (role === 'admin' ? <AdminDashboard setView={setView} user={user} /> : <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />)}
-            {view === 'detail' && selectedManga && <MangaDetailPage manga={selectedManga} setView={setView} onAddToLibrary={handleAddToLibrary} source={selectedSource} setSource={setSelectedSource} />}
+            {view === 'detail' && selectedManga && <MangaDetailPage manga={selectedManga} setView={setView} onAddToLibrary={handleAddToLibrary} source={selectedSource} setSource={setSelectedSource} setWatchQuery={setWatchQuery} />}
+            {view === 'watch' && <WatchPage setView={setView} watchQuery={watchQuery} setWatchQuery={setWatchQuery} addToast={addToast} />}
+            {view === 'anime' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingAnime} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />}
           </motion.div>
         </AnimatePresence>
       </main>

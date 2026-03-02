@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { supabase } from './src/db/supabase.js';
 import { fetchMangaChapters, fetchPageImages, fetchMangaMetadata, searchMangaUrl } from './src/services/mangaProvider.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import * as cheerio from 'cheerio';
 
 dotenv.config();
 
@@ -15,16 +16,19 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 const aiModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-8b' });
 
-// ---- Server-side In-Memory Cache (10 min TTL) ----
-const apiCache = new Map<string, { data: any; ts: number }>();
+// ---- Server-side In-Memory Cache (10 min TTL default) ----
+const apiCache = new Map<string, { data: any; ts: number; ttl?: number }>();
 const CACHE_TTL = 10 * 60 * 1000;
 function getCached(key: string) {
     const entry = apiCache.get(key);
-    if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
+    if (!entry) return null;
+    const ttl = entry.ttl ? entry.ttl * 1000 : CACHE_TTL;
+    if (Date.now() - entry.ts < ttl) return entry.data;
+    apiCache.delete(key);
     return null;
 }
-function setCache(key: string, data: any) {
-    apiCache.set(key, { data, ts: Date.now() });
+function setCache(key: string, data: any, ttlSeconds?: number) {
+    apiCache.set(key, { data, ts: Date.now(), ttl: ttlSeconds });
 }
 
 // Mangadex genre name → UUID (seeded in DB, hardcoded for fast lookup)
@@ -243,6 +247,185 @@ app.post('/api/ai/summary', async (req, res) => {
         res.status(500).json({ error: 'Failed to generate summary' });
     }
 });
+
+// ==== Anime Integration Routes (SankaVollereii API) ====
+app.get('/api/anime/trending', async (req, res) => {
+    try {
+        const cacheKey = 'anime_sanka_trending';
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        const response = await fetch('https://www.sankavollerei.com/anime/home');
+        if (!response.ok) throw new Error(`Sanka Home Error: ${response.status}`);
+
+        const json = await response.json();
+        // Sanka API is dynamic - check multiple possible paths
+        const list = json?.data?.ongoing?.animeList || json?.data?.ongoing || json?.data?.ongoingAnime || [];
+
+        if (!Array.isArray(list)) throw new Error('Trending ongoing is not an array');
+
+        // Map to standard Manga/Media shape for home page
+        const mapped = list.slice(0, 15).map((a: any) => ({
+            id: a.animeId,
+            title: a.title,
+            cover: a.poster,
+            genre: ['Anime'],
+            rating: a.score || '?',
+            status: 'Ongoing'
+        }));
+
+        setCache(cacheKey, mapped, 3600); // 1 hour cache
+        res.json(mapped);
+    } catch (err) {
+        console.error('Anime Trending Error:', err);
+        res.status(500).json({ error: 'Server error fetching trending anime' });
+    }
+});
+
+app.get('/api/anime/search', async (req, res) => {
+    try {
+        const query = req.query.q as string;
+        if (!query) return res.json([]);
+
+        // Cache Sanka API aggressively to protect 1000 requests/hour limit
+        const cacheKey = `anime_sanka_search:${query.toLowerCase()}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        try {
+            const url = `https://www.sankavollerei.com/anime/search/${encodeURIComponent(query)}`;
+            const response = await fetch(url);
+            if (response.ok) {
+                const json = await response.json();
+                if (json?.data?.animeList && json.data.animeList.length > 0) {
+                    setCache(cacheKey, json.data.animeList);
+                    return res.json(json.data.animeList);
+                }
+            }
+        } catch (initialErr) {
+            console.error('Initial Anime Search Error (Sanka):', initialErr);
+        }
+
+        // --- Fallback Strategy for Alternate/English Titles ---
+        // Sanka often only indexes Romaji (Japanese) names. If no results, try using Jikan as a translator bridge.
+        try {
+            const jikanRes = await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`);
+            const jikanJson = await jikanRes.json();
+
+            if (jikanJson?.data && jikanJson.data.length > 0) {
+                const anime = jikanJson.data[0];
+                // Candidate titles to try in Sanka
+                const candidates = new Set<string>();
+                if (anime.title) candidates.add(anime.title);
+                if (anime.title_japanese) candidates.add(anime.title_japanese);
+                if (anime.title_english) candidates.add(anime.title_english);
+                if (Array.isArray(anime.titles)) {
+                    anime.titles.forEach((t: any) => { if (t.title) candidates.add(t.title); });
+                }
+
+                for (const cand of candidates) {
+                    if (cand.toLowerCase() === query.toLowerCase()) continue; // Already tried
+
+                    const fallbackUrl = `https://www.sankavollerei.com/anime/search/${encodeURIComponent(cand)}`;
+                    const fallbackResponse = await fetch(fallbackUrl);
+                    if (fallbackResponse.ok) {
+                        const fallbackJson = await fallbackResponse.json();
+                        if (fallbackJson?.data?.animeList && fallbackJson.data.animeList.length > 0) {
+                            // Success! Cache and return
+                            setCache(cacheKey, fallbackJson.data.animeList);
+                            return res.json(fallbackJson.data.animeList);
+                        }
+                    }
+                }
+            }
+        } catch (fallbackErr) {
+            console.error('Anime Search Fallback Error:', fallbackErr);
+        }
+
+        return res.json([]);
+    } catch (err) {
+        console.error('Anime Search Error:', err);
+        res.status(500).json({ error: 'Server error during anime search' });
+    }
+});
+
+app.get('/api/anime/details/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const cacheKey = `anime_sanka_details:${id}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        const response = await fetch(`https://www.sankavollerei.com/anime/anime/${encodeURIComponent(id)}`);
+        if (!response.ok) throw new Error(`Sanka Details Error: ${response.status}`);
+
+        const json = await response.json();
+
+        if (json?.data) {
+            setCache(cacheKey, json.data);
+            return res.json(json.data);
+        }
+        return res.status(404).json({ error: 'Anime details not found.' });
+    } catch (err) {
+        console.error('Anime Details Error:', err);
+        res.status(500).json({ error: 'Server error fetching anime details' });
+    }
+});
+
+app.get('/api/anime/stream/:episodeId', async (req, res) => {
+    try {
+        const { episodeId } = req.params;
+        const cacheKey = `anime_sanka_stream:${episodeId}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        const response = await fetch(`https://www.sankavollerei.com/anime/episode/${encodeURIComponent(episodeId)}`);
+
+        if (!response.ok) {
+            console.error('Sanka Episode Error Status:', response.status);
+            return res.status(404).json({ error: 'Episode streaming link not found. Try another source.' });
+        }
+
+        const json = await response.json();
+
+        // 1. Try Default Stream URL first
+        let streamUrl = json?.data?.defaultStreamingUrl;
+
+        // 2. Fallback: Search in server quality list if default is missing
+        if (!streamUrl && json?.data?.server?.qualities) {
+            for (const quality of json.data.server.qualities) {
+                if (quality.serverList && quality.serverList.length > 0) {
+                    // Prefer certain providers that work well in iframes
+                    const preferred = quality.serverList.find((s: any) =>
+                        s.title.toLowerCase().includes('vidhide') ||
+                        s.title.toLowerCase().includes('desu') ||
+                        s.title.toLowerCase().includes('filedon')
+                    ) || quality.serverList[0];
+
+                    if (preferred.url) {
+                        streamUrl = preferred.url;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (streamUrl) {
+            const streamData = {
+                streamUrl,
+                type: 'iframe'
+            };
+            setCache(cacheKey, streamData);
+            return res.json(streamData);
+        }
+
+        return res.status(404).json({ error: 'Failed to extract video iframe.' });
+    } catch (err) {
+        console.error('Sanka Stream Error:', err);
+        res.status(500).json({ error: 'Internal server error while fetching stream.' });
+    }
+});
+// ============================================
 
 // Library Routes
 app.get('/api/library', async (req, res) => {
@@ -586,18 +769,26 @@ app.get('/api/manga/:id/chapters', async (req, res) => {
         const title = req.query.title as string || '';
         const source = req.query.source as string || 'mangadex';
 
-        if (source === 'mangakakalot') {
-            const { Manga } = await import('mangascrape');
-            const searchResults = await Manga.search(title, { provider: 'mangakakalot' });
+        if (source === 'mangabuddy') {
+            const { MangaBuddy } = await import('mangascrape');
+            const buddy = new MangaBuddy();
+            const searchResults = await buddy.search(title);
             if (searchResults && searchResults.length > 0) {
-                const manga = searchResults[0];
-                const chapters = await manga.getChapters();
-                return res.json(chapters.map((ch: any) => ({
-                    id: ch.url, // Use URL as ID for scraping
-                    chapter: ch.chapter,
-                    title: ch.title,
-                    language: 'en'
-                })));
+                const firstResult = searchResults[0];
+                try {
+                    const details = await buddy.id(firstResult.id);
+                    return res.json(details.chapters.map((ch: any) => {
+                        const chapterNumber = ch.title.replace(/[^0-9.]/g, '') || ch.title;
+                        return {
+                            id: `${firstResult.id}||${ch.id}`,
+                            chapter: chapterNumber,
+                            title: ch.title,
+                            language: 'en'
+                        };
+                    }));
+                } catch (e) {
+                    console.error('MangaBuddy ID fetch error', e);
+                }
             }
             return res.json([]);
         }
@@ -675,16 +866,24 @@ app.get('/api/manga/:id/chapters', async (req, res) => {
 
 app.get('/api/manga/chapter/:id/pages', async (req, res) => {
     try {
-        const { id: chapterIdOrUrl } = req.params;
+        const { id } = req.params;
         const source = req.query.source as string || 'mangadex';
 
-        if (source === 'mangakakalot' || chapterIdOrUrl.includes('http')) {
-            const { Manga } = await import('mangascrape');
-            const pages = await Manga.getPages(chapterIdOrUrl, { provider: 'mangakakalot' });
-            return res.json(pages);
+        if (source === 'mangabuddy') {
+            const { MangaBuddy } = await import('mangascrape');
+            const buddy = new MangaBuddy();
+            try {
+                // chapterIdOrUrl is stored as 'manga-id||chapter-id'
+                const [mangaId, trueChapterId] = id.split('||');
+                const pages = await buddy.chapter(mangaId, trueChapterId);
+                return res.json(pages);
+            } catch (e) {
+                console.error('MangaBuddy Chapter Fetch Error', e);
+                return res.json([]);
+            }
         }
 
-        const url = `https://api.mangadex.org/at-home/server/${chapterIdOrUrl}`;
+        const url = `https://api.mangadex.org/at-home/server/${id}`;
         const response = await fetch(url);
         const json = await response.json();
 
@@ -740,6 +939,40 @@ app.get('/api/manga/chapter/:id/pages', async (req, res) => {
     } catch (err: any) {
         console.error('Mangadex Pages Error:', err);
         res.status(500).json({ error: 'Server error fetching pages' });
+    }
+});
+
+app.get('/api/manga/image-proxy', async (req, res) => {
+    try {
+        const urlStr = req.query.url as string;
+        if (!urlStr) {
+            return res.status(400).json({ error: 'URL is required' });
+        }
+
+        const fetchRes = await fetch(urlStr, {
+            headers: {
+                'Referer': 'https://mangabuddy.com/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        });
+
+        if (!fetchRes.ok) {
+            console.error('Proxy Image Error HTTP', fetchRes.status);
+            return res.status(fetchRes.status).send('Failed to fetch image');
+        }
+
+        const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
+        res.setHeader('Content-Type', contentType);
+
+        const arrayBuffer = await fetchRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(buffer);
+
+    } catch (e) {
+        console.error('Image Proxy Crash:', e);
+        res.status(500).send('Proxy Stream Error');
     }
 });
 

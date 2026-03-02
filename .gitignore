@@ -6,3 +6,21 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# OCR & Local Data
+*.traineddata
+__pycache__/
+artifacts/
+*.json
+*.txt
+*.cjs
+*.mjs
+!package.json
+!tsconfig.json
+!metadata.json
+!package-lock.json
+
+# Tooling
+scripts/
+tmp_api/
+translation-bubbles-test.png
