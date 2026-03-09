@@ -2,10 +2,15 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import pg from 'pg';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { supabase } from './src/db/supabase.js';
 import { fetchMangaChapters, fetchPageImages, fetchMangaMetadata, searchMangaUrl } from './src/services/mangaProvider.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as cheerio from 'cheerio';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -1384,6 +1389,201 @@ app.post('/api/ai/ocr-paddle', async (req, res) => {
             } catch (err) {
                 console.error('Failed to parse OCR output:', resultData);
                 res.status(500).json({ error: 'Failed to parse OCR output' });
+                const verticalGap = Math.abs(wb.y0 - currentBlock.bbox.y0);
+                const horizontalGap = wb.x0 - currentBlock.bbox.x1;
+                const lineHeight = currentBlock.bbox.y1 - currentBlock.bbox.y0;
+
+                if (verticalGap < lineHeight * 1.5 && horizontalGap > -lineHeight && horizontalGap < lineHeight * 3) {
+                    currentBlock.text += ' ' + word.text;
+                    currentBlock.bbox.x0 = Math.min(currentBlock.bbox.x0, wb.x0);
+                    currentBlock.bbox.y0 = Math.min(currentBlock.bbox.y0, wb.y0);
+                    currentBlock.bbox.x1 = Math.max(currentBlock.bbox.x1, wb.x1);
+                    currentBlock.bbox.y1 = Math.max(currentBlock.bbox.y1, wb.y1);
+                } else {
+                    blocks.push(currentBlock);
+                    currentBlock = { text: word.text, bbox: { ...wb } };
+                }
+            }
+        }
+        if (currentBlock.text) blocks.push(currentBlock);
+
+        if (blocks.length === 0) {
+            return res.json({ translations: [], targetLanguage });
+        }
+
+        const langMap: Record<string, string> = {
+            'English': 'en', 'Spanish': 'es', 'French': 'fr', 'German': 'de',
+            'Russian': 'ru', 'Chinese (Simplified)': 'zh-CN', 'Japanese': 'ja',
+            'Korean': 'ko', 'Italian': 'it', 'Portuguese': 'pt', 'Indonesian': 'id'
+        };
+        const targetCode = langMap[targetLanguage] || 'en';
+
+        try {
+            const inputTexts = blocks.map(b => b.text);
+            const pythonBridge = spawn('python', ['translate_bridge.py']);
+
+            let outputChunks: Buffer[] = [];
+            pythonBridge.stdout.on('data', (chunk) => {
+                outputChunks.push(chunk);
+            });
+
+            pythonBridge.stdin.write(JSON.stringify({
+                texts: inputTexts,
+                target_lang: targetCode
+            }));
+            pythonBridge.stdin.end();
+
+            await new Promise((resolve) => {
+                pythonBridge.on('close', resolve);
+            });
+
+            const outputData = Buffer.concat(outputChunks).toString('utf-8');
+            const translatedTexts = JSON.parse(outputData || '[]');
+
+            const translations = blocks.map((block, i) => ({
+                original: block.text,
+                translated: translatedTexts[i] || block.text,
+                x: block.bbox.x0,
+                y: block.bbox.y0,
+                width: block.bbox.x1 - block.bbox.x0,
+                height: block.bbox.y1 - block.bbox.y0
+            }));
+
+            res.json({ translations, targetLanguage });
+        } catch (pyErr) {
+            console.error('Python Bridge Error:', pyErr);
+            const translations = blocks.map(block => ({
+                original: block.text,
+                translated: block.text,
+                x: block.bbox.x0,
+                y: block.bbox.y0,
+                width: block.bbox.x1 - block.bbox.x0,
+                height: block.bbox.y1 - block.bbox.y0
+            }));
+            res.json({ translations, targetLanguage });
+        }
+    } catch (err: any) {
+        console.error('Translation pipeline error:', err?.message);
+        res.status(500).json({ error: 'Translation failed', details: err?.message });
+    }
+});
+
+// Translate pre-extracted text strings (supports remote OCR service)
+app.post('/api/ai/translate-only', async (req, res) => {
+    try {
+        const { texts, targetLanguage, sourceLanguage } = req.body;
+        if (!texts || !Array.isArray(texts)) {
+            return res.json({ translations: [] });
+        }
+
+        const langMap: Record<string, string> = {
+            'English': 'en', 'Spanish': 'es', 'French': 'fr', 'German': 'de',
+            'Russian': 'ru', 'Chinese (Simplified)': 'zh-CN', 'Japanese': 'ja',
+            'Korean': 'ko', 'Italian': 'it', 'Portuguese': 'pt', 'Indonesian': 'id'
+        };
+        const targetCode = langMap[targetLanguage] || 'en';
+
+        // Remote OCR service mode
+        if (OCR_SERVICE_URL) {
+            try {
+                const remoteRes = await fetch(`${OCR_SERVICE_URL}/translate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        texts,
+                        target_lang: targetCode,
+                        source_lang: sourceLanguage || 'auto'
+                    })
+                });
+                const data = await remoteRes.json();
+                return res.json({ translations: data.translations || [] });
+            } catch (remoteErr) {
+                console.error('Remote translate service error, falling back to local:', remoteErr);
+            }
+        }
+
+        // Local Python bridge mode
+        const pythonBridge = spawn('python', ['translate_bridge.py']);
+        let resultData = '';
+        let errorData = '';
+
+        pythonBridge.stdout.on('data', (data) => { resultData += data.toString(); });
+        pythonBridge.stderr.on('data', (data) => { errorData += data.toString(); });
+
+        pythonBridge.stdin.write(JSON.stringify({
+            mode: 'translate',
+            texts: texts,
+            target_lang: targetCode,
+            source: sourceLanguage || 'auto'
+        }) + '\n');
+        pythonBridge.stdin.end();
+
+        await new Promise((resolve) => { pythonBridge.on('close', resolve); });
+
+        if (!resultData.trim()) {
+            return res.json({ translations: [] });
+        }
+
+        try {
+            const translatedTexts = JSON.parse(resultData);
+            res.json({ translations: translatedTexts });
+        } catch (e) {
+            console.error('JSON Parse error on translation output:', resultData);
+            res.json({ translations: [] });
+        }
+    } catch (err: any) {
+        console.error('Translate-only error:', err?.message);
+        res.status(500).json({ error: 'Translation failed' });
+    }
+});
+
+// PaddleOCR endpoint (supports remote OCR service)
+app.post('/api/ai/ocr-paddle', async (req, res) => {
+    try {
+        const { url, lang } = req.body;
+        if (!url) return res.status(400).json({ error: 'URL required' });
+
+        // Remote OCR service mode
+        if (OCR_SERVICE_URL) {
+            try {
+                const remoteRes = await fetch(`${OCR_SERVICE_URL}/ocr`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url, lang: lang || 'Japanese' })
+                });
+                const data = await remoteRes.json();
+                return res.json(data);
+            } catch (remoteErr) {
+                console.error('Remote OCR service error, falling back to local:', remoteErr);
+            }
+        }
+
+        // Local Python bridge mode
+        const pythonProcess = spawn('python', ['translate_bridge.py']);
+        let resultData = '';
+        let errorData = '';
+
+        pythonProcess.stdout.on('data', (data) => { resultData += data.toString(); });
+        pythonProcess.stderr.on('data', (data) => { errorData += data.toString(); });
+
+        pythonProcess.stdin.write(JSON.stringify({
+            mode: 'ocr',
+            url,
+            lang: lang || 'Japanese'
+        }));
+        pythonProcess.stdin.end();
+
+        pythonProcess.on('close', (code) => {
+            if (code !== 0) {
+                console.error('OCR Python process exited with code', code, errorData);
+                return res.status(500).json({ error: 'OCR process failed', details: errorData });
+            }
+            try {
+                const parsed = JSON.parse(resultData);
+                res.json(parsed);
+            } catch (err) {
+                console.error('Failed to parse OCR output:', resultData);
+                res.status(500).json({ error: 'Failed to parse OCR output' });
             }
         });
     } catch (err: any) {
@@ -1393,11 +1593,16 @@ app.post('/api/ai/ocr-paddle', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+// Serve static files from the React app dist folder
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// The "catchall" handler: for any request that doesn't
+// match one above, send back React's index.html file.
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
-    if (OCR_SERVICE_URL) {
-        console.log(`OCR Service: Remote (${OCR_SERVICE_URL})`);
-    } else {
-        console.log(`OCR Service: Local Python bridge`);
-    }
+    console.log(`OCR Service: ${process.env.OCR_REST_API ? 'REST API (' + process.env.OCR_REST_API + ')' : 'Local Python bridge'}`);
 });

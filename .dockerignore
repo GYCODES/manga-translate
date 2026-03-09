@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.env
+*.log
+*.traineddata
+large_req.json
+req.json
+artifacts
+tmp_api

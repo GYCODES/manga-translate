@@ -20,6 +20,9 @@ RUN pip3 install deep-translator
 # Copy the rest of the backend files
 COPY . .
 
+# Build the frontend
+RUN npm run build
+
 # Expose port (Render automatically assigns one to process.env.PORT, but defaults to 3000)
 EXPOSE 3000
 
