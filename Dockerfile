@@ -1,29 +1,38 @@
-# Use an official Node.js runtime as a parent image
-FROM node:18-bullseye-slim
+# Use an official Node.js runtime as a parent image (Node 20 recommended)
+FROM node:20-bookworm-slim
 
-# Install Python and pip
-RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
+# Install Python, pip, and build tools for native modules (like canvas/oxide)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    build-essential \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Map 'python' to 'python3' so the spawn('python') commands work
+# Map 'python' to 'python3'
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Set the working directory
 WORKDIR /app
 
-# Copy package files and install Node dependencies
-COPY package*.json ./
+# Copy package.json and install Node dependencies (ignoring local lockfile for platform compatibility)
+COPY package.json ./
 RUN npm install
 
-# Copy Python requirements if any, or just install deep-translator
-RUN pip3 install deep-translator
+# Install Python translation library
+RUN pip3 install deep-translator --break-system-packages
 
-# Copy the rest of the backend files
+# Copy the rest of the project files
 COPY . .
 
-# Build the frontend
+# Build the frontend (React/Vite)
 RUN npm run build
 
-# Expose port (Render automatically assigns one to process.env.PORT, but defaults to 3000)
+# Expose port
 EXPOSE 3000
 
 # Command to run the backend
