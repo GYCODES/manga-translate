@@ -1,12 +1,16 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import pg from 'pg';
 import { supabase } from './src/db/supabase.js';
 import { fetchMangaChapters, fetchPageImages, fetchMangaMetadata, searchMangaUrl } from './src/services/mangaProvider.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as cheerio from 'cheerio';
 
 dotenv.config();
+
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const app = express();
 app.use(cors());
@@ -64,14 +68,43 @@ const mapMangadexToManga = (m: any) => {
         .map((t: any) => t.attributes?.name?.en)
         .filter(Boolean).slice(0, 3);
 
+    // Extract description — try 'en' first, fallback to first available language
+    const descObj = m.attributes.description || {};
+    const description = descObj.en || Object.values(descObj)[0] || '';
+
     return {
         id: m.id,
         title,
         cover: coverUrl,
         genre: genre.length ? genre : ['Manga'],
-        rating: (Math.random() * (5 - 3.5) + 3.5).toFixed(1), // Mock rating, Mangadex requires separate API call for stats
-        status: m.attributes.status ? m.attributes.status.charAt(0).toUpperCase() + m.attributes.status.slice(1) : 'Ongoing'
+        rating: '0',  // Will be enriched with real stats below
+        status: m.attributes.status ? m.attributes.status.charAt(0).toUpperCase() + m.attributes.status.slice(1) : 'Ongoing',
+        description
     };
+};
+
+// Fetch real ratings from MangaDex statistics API and enrich manga items
+const enrichWithStats = async (items: any[]) => {
+    try {
+        const ids = items.map(i => i.id);
+        const params = ids.map(id => `manga[]=${id}`).join('&');
+        const statsRes = await fetch(`https://api.mangadex.org/statistics/manga?${params}`);
+        const statsJson = await statsRes.json();
+        if (statsJson.statistics) {
+            for (const item of items) {
+                const stat = statsJson.statistics[item.id];
+                if (stat?.rating?.bayesian) {
+                    item.rating = (stat.rating.bayesian / 2).toFixed(1); // Convert 1-10 scale to 1-5
+                } else if (stat?.rating?.average) {
+                    item.rating = (stat.rating.average / 2).toFixed(1);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Stats fetch error:', err);
+        // Silently fail — items keep rating '0' which UI can hide
+    }
+    return items;
 };
 
 // Cover proxy — pipes Mangadex CDN images with correct Referer header
@@ -99,23 +132,28 @@ app.get('/api/cover-proxy', async (req, res) => {
     }
 });
 
-// Get trending manga (from Mangadex, with optional genre filter + server cache)
 app.get('/api/manga/trending', async (req, res) => {
     try {
         const genres = (req.query.genres as string) || '';
-        const cacheKey = `trending:${genres}`;
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const pageSize = 15;
+        const offset = (page - 1) * pageSize;
+        const cacheKey = `trending:${genres}:page${page}`;
         const cached = getCached(cacheKey);
         if (cached) return res.json(cached);
 
         const tagParams = genres ? buildTagParams(genres) : '';
-        const url = `https://api.mangadex.org/manga?includes[]=cover_art&order[followedCount]=desc&limit=20&hasAvailableChapters=true${tagParams}`;
+        const url = `https://api.mangadex.org/manga?includes[]=cover_art&order[followedCount]=desc&limit=${pageSize}&offset=${offset}&hasAvailableChapters=true${tagParams}`;
         const response = await fetch(url);
         const json = await response.json();
 
         if (json.data) {
-            const mapped = json.data.map(mapMangadexToManga);
-            setCache(cacheKey, mapped);
-            return res.json(mapped);
+            const items = json.data.map(mapMangadexToManga);
+            await enrichWithStats(items);
+            const total = json.total || 10000;
+            const result = { items, total, page, pageSize };
+            setCache(cacheKey, result);
+            return res.json(result);
         }
         throw new Error('No data from Mangadex');
     } catch (err) {
@@ -142,6 +180,7 @@ app.get('/api/manga/search', async (req, res) => {
 
         if (json.data) {
             const mapped = json.data.map(mapMangadexToManga);
+            await enrichWithStats(mapped);
             setCache(cacheKey, mapped);
             return res.json(mapped);
         }
@@ -251,31 +290,49 @@ app.post('/api/ai/summary', async (req, res) => {
 // ==== Anime Integration Routes (SankaVollereii API) ====
 app.get('/api/anime/trending', async (req, res) => {
     try {
-        const cacheKey = 'anime_sanka_trending';
-        const cached = getCached(cacheKey);
-        if (cached) return res.json(cached);
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const pageSize = 15;
 
-        const response = await fetch('https://www.sankavollerei.com/anime/home');
-        if (!response.ok) throw new Error(`Sanka Home Error: ${response.status}`);
+        // Use a single cache key for the full list, paginate in-memory
+        const cacheKey = 'anime_sanka_trending_full';
+        let allAnime: any[] | null = getCached(cacheKey);
 
-        const json = await response.json();
-        // Sanka API is dynamic - check multiple possible paths
-        const list = json?.data?.ongoing?.animeList || json?.data?.ongoing || json?.data?.ongoingAnime || [];
+        if (!allAnime) {
+            const response = await fetch('https://www.sankavollerei.com/anime/home');
+            if (!response.ok) throw new Error(`Sanka Home Error: ${response.status}`);
 
-        if (!Array.isArray(list)) throw new Error('Trending ongoing is not an array');
+            const json = await response.json();
 
-        // Map to standard Manga/Media shape for home page
-        const mapped = list.slice(0, 15).map((a: any) => ({
-            id: a.animeId,
-            title: a.title,
-            cover: a.poster,
-            genre: ['Anime'],
-            rating: a.score || '?',
-            status: 'Ongoing'
-        }));
+            // Merge ongoing + completed lists
+            const ongoingRaw = json?.data?.ongoing?.animeList || json?.data?.ongoing || json?.data?.ongoingAnime || [];
+            const completedRaw = json?.data?.completed?.animeList || json?.data?.completed || [];
 
-        setCache(cacheKey, mapped, 3600); // 1 hour cache
-        res.json(mapped);
+            const ongoingList = Array.isArray(ongoingRaw) ? ongoingRaw : [];
+            const completedList = Array.isArray(completedRaw) ? completedRaw : [];
+
+            // Map to standard shape — use real data, null/empty for missing
+            const mapAnime = (a: any, status: string) => ({
+                id: a.animeId,
+                title: a.title,
+                cover: a.poster,
+                genre: a.genreList?.map((g: any) => g.title) || [],
+                rating: a.score || null,
+                status
+            });
+
+            allAnime = [
+                ...ongoingList.map((a: any) => mapAnime(a, 'Ongoing')),
+                ...completedList.map((a: any) => mapAnime(a, 'Completed'))
+            ];
+
+            setCache(cacheKey, allAnime, 3600); // 1 hour cache
+        }
+
+        const total = allAnime.length;
+        const start = (page - 1) * pageSize;
+        const items = allAnime.slice(start, start + pageSize);
+
+        res.json({ items, total, page, pageSize });
     } catch (err) {
         console.error('Anime Trending Error:', err);
         res.status(500).json({ error: 'Server error fetching trending anime' });
@@ -689,24 +746,19 @@ const verifyAdmin = async (req, res, next) => {
 // GET all users (Admin only)
 app.get('/api/admin/users', verifyAdmin, async (req, res) => {
     try {
-        // We get profiles directly which has references to auth.users, but we might want emails.
-        // The easiest way is to use Supabase admin API for users and join locally with profiles, 
-        // or just rely on profiles table if emails aren't strictly needed.
-        // Let's get auth users from admin API (needs service_role key)
-        const { data: { users }, error } = await supabase.auth.admin.listUsers();
-        if (error) throw error;
-
-        const { data: profiles, error: profileError } = await supabase.from('profiles').select('*');
-        if (profileError) throw profileError;
-
-        const merged = users.map(u => ({
-            id: u.id,
-            email: u.email,
-            created_at: u.created_at,
-            profile: profiles.find(p => p.id === u.id) || { username: 'Unknown', role: 'user', favorite_tags: [] }
+        const result = await pool.query(`
+            SELECT u.id, u.email, u.created_at, p.username, p.role, p.favorite_tags
+            FROM auth.users u
+            LEFT JOIN public.profiles p ON u.id = p.id
+            ORDER BY u.created_at DESC
+        `);
+        const users = result.rows.map(row => ({
+            id: row.id,
+            email: row.email,
+            created_at: row.created_at,
+            profile: { username: row.username || 'Unknown', role: row.role || 'user', favorite_tags: row.favorite_tags || [] }
         }));
-
-        res.json(merged);
+        res.json(users);
     } catch (err: any) {
         console.error('Admin API Error:', err);
         res.status(500).json({ error: err.message || 'Failed to fetch users' });
@@ -719,9 +771,7 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) => {
         const { id } = req.params;
         if (!id) return res.status(400).json({ error: 'User ID required' });
 
-        const { error } = await supabase.auth.admin.deleteUser(id);
-        if (error) throw error;
-
+        await pool.query('DELETE FROM auth.users WHERE id = $1', [id]);
         res.json({ success: true, message: 'User deleted' });
     } catch (err: any) {
         console.error('Admin Delete Error:', err);
@@ -732,33 +782,121 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) => {
 // Site Settings
 app.get('/api/settings', async (req, res) => {
     try {
-        const { data, error } = await supabase.from('site_settings').select('*').eq('id', 1).single();
-        if (error || !data) {
-            // Provide safe defaults so frontend doesn't crash if DB is unseeded
-            return res.json({
-                primary_color: '#ef4444',
-                background_dark: '#0f1115',
-                theme_mode: 'dark'
-            });
+        // Ensure table exists just in case
+        await pool.query(`CREATE TABLE IF NOT EXISTS public.site_settings (id INT PRIMARY KEY, primary_color TEXT, background_dark TEXT, theme_mode TEXT);`);
+        const result = await pool.query('SELECT * FROM public.site_settings WHERE id = 1');
+        if (result.rows.length === 0) {
+            return res.json({ primary_color: '#ef4444', background_dark: '#0f1115', theme_mode: 'dark' });
         }
-        res.json(data);
+        res.json(result.rows[0]);
     } catch (err: any) {
-        res.json({
-            primary_color: '#ef4444',
-            background_dark: '#0f1115',
-            theme_mode: 'dark'
-        });
+        res.json({ primary_color: '#ef4444', background_dark: '#0f1115', theme_mode: 'dark' });
     }
 });
 
 app.post('/api/admin/settings', async (req, res) => {
     try {
         const { primary_color, background_dark, theme_mode } = req.body;
-        const { error } = await supabase.from('site_settings').update({ primary_color, background_dark, theme_mode }).eq('id', 1);
-        if (error) throw error;
+        await pool.query(`CREATE TABLE IF NOT EXISTS public.site_settings (id INT PRIMARY KEY, primary_color TEXT, background_dark TEXT, theme_mode TEXT);`);
+        await pool.query(`
+            INSERT INTO public.site_settings (id, primary_color, background_dark, theme_mode)
+            VALUES (1, $1, $2, $3)
+            ON CONFLICT (id) DO UPDATE SET
+                primary_color = EXCLUDED.primary_color,
+                background_dark = EXCLUDED.background_dark,
+                theme_mode = EXCLUDED.theme_mode;
+        `, [primary_color, background_dark, theme_mode]);
         res.json({ success: true, message: 'Settings saved' });
     } catch (err: any) {
         res.status(500).json({ error: err.message || 'Failed to update settings' });
+    }
+});
+
+// Feedback - Submit
+app.post('/api/feedback', async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        let userId = null;
+        let userEmail = 'anonymous';
+        let username = 'Anonymous';
+        if (token) {
+            const { data: { user } } = await supabase.auth.getUser(token);
+            if (user) {
+                userId = user.id;
+                userEmail = user.email || 'unknown';
+                const { data: profile } = await supabase.from('profiles').select('username').eq('id', user.id).single();
+                username = profile?.username || userEmail.split('@')[0];
+            }
+        }
+        const { message, category } = req.body;
+        if (!message || message.trim().length === 0) {
+            return res.status(400).json({ error: 'Message is required' });
+        }
+        await pool.query(`
+            INSERT INTO public.feedback (user_id, email, username, message, category, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        `, [userId, userEmail, username, message.trim(), category || 'general', new Date().toISOString()]);
+        res.json({ success: true, message: 'Feedback submitted!' });
+    } catch (err: any) {
+        console.error('Feedback submit error:', err);
+        res.status(500).json({ error: err.message || 'Failed to submit feedback' });
+    }
+});
+
+// Feedback - Admin fetch (newest first)
+app.get('/api/admin/feedback', async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError || !user) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+        if (profile?.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+
+        const result = await pool.query('SELECT * FROM public.feedback ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (err: any) {
+        console.error('Feedback fetch error:', err);
+        res.status(500).json({ error: err.message || 'Failed to fetch feedback' });
+    }
+});
+
+// Update feedback status (admin only)
+app.patch('/api/admin/feedback/:id/status', async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: { user } } = await supabase.auth.getUser(token);
+        if (!user) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+        if (profile?.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+
+        const { status } = req.body;
+        if (!['unread', 'read', 'completed'].includes(status)) {
+             return res.status(400).json({ error: 'Invalid status' });
+        }
+
+        await pool.query('UPDATE public.feedback SET status = $1 WHERE id = $2', [status, req.params.id]);
+        res.json({ success: true, status });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message || 'Failed to update feedback status' });
+    }
+});
+
+// Delete feedback (admin only)
+app.delete('/api/admin/feedback/:id', async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: { user } } = await supabase.auth.getUser(token);
+        if (!user) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+        if (profile?.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+
+        await pool.query('DELETE FROM public.feedback WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message || 'Failed to delete feedback' });
     }
 });
 
@@ -949,15 +1087,18 @@ app.get('/api/manga/image-proxy', async (req, res) => {
             return res.status(400).json({ error: 'URL is required' });
         }
 
+        const referer = urlStr.includes('mangabuddy.com') ? 'https://mangabuddy.com/' : 'https://mangadex.org/';
+
         const fetchRes = await fetch(urlStr, {
             headers: {
-                'Referer': 'https://mangabuddy.com/',
+                'Referer': referer,
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            },
+            signal: AbortSignal.timeout(15000) // 15s timeout
         });
 
         if (!fetchRes.ok) {
-            console.error('Proxy Image Error HTTP', fetchRes.status);
+            console.error('Proxy Image Error HTTP', fetchRes.status, 'for', urlStr);
             return res.status(fetchRes.status).send('Failed to fetch image');
         }
 
@@ -970,7 +1111,11 @@ app.get('/api/manga/image-proxy', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=86400');
         res.send(buffer);
 
-    } catch (e) {
+    } catch (e: any) {
+        if (e.name === 'TimeoutError') {
+            console.error('Image Proxy Timeout:', req.query.url);
+            return res.status(504).send('Gateway Timeout');
+        }
         console.error('Image Proxy Crash:', e);
         res.status(500).send('Proxy Stream Error');
     }
@@ -1006,6 +1151,9 @@ app.get('/api/scrape/pages', async (req, res) => {
 import Tesseract from 'tesseract.js';
 import { spawn } from 'child_process';
 
+// Remote OCR service URL (HuggingFace Spaces or local FastAPI)
+const OCR_SERVICE_URL = process.env.OCR_SERVICE_URL || '';
+
 app.post('/api/ai/translate', async (req, res) => {
     try {
         const { imageUrl, targetLanguage = 'English' } = req.body;
@@ -1032,23 +1180,19 @@ app.post('/api/ai/translate', async (req, res) => {
         let currentBlock = { text: '', bbox: { x0: 0, y0: 0, x1: 0, y1: 0 } };
 
         for (const word of ocrData.words) {
-            // Filter noise: skip low confidence AND very small boxes (specks)
             const wb = word.bbox;
             const width = wb.x1 - wb.x0;
             const height = wb.y1 - wb.y0;
-
-            if (word.confidence < 70) continue; // Higher confidence threshold
-            if (width < 5 || height < 5) continue; // Filter out tiny specks
+            if (word.confidence < 70) continue;
+            if (width < 5 || height < 5) continue;
 
             if (!currentBlock.text) {
                 currentBlock = { text: word.text, bbox: { ...wb } };
             } else {
-                // If word is close to current block vertically AND horizontally, merge
                 const verticalGap = Math.abs(wb.y0 - currentBlock.bbox.y0);
                 const horizontalGap = wb.x0 - currentBlock.bbox.x1;
                 const lineHeight = currentBlock.bbox.y1 - currentBlock.bbox.y0;
 
-                // Merge if it's on the same line/box conceptually (not across the entire page)
                 if (verticalGap < lineHeight * 1.5 && horizontalGap > -lineHeight && horizontalGap < lineHeight * 3) {
                     currentBlock.text += ' ' + word.text;
                     currentBlock.bbox.x0 = Math.min(currentBlock.bbox.x0, wb.x0);
@@ -1067,7 +1211,6 @@ app.post('/api/ai/translate', async (req, res) => {
             return res.json({ translations: [], targetLanguage });
         }
 
-        // 4. Language code mapping
         const langMap: Record<string, string> = {
             'English': 'en', 'Spanish': 'es', 'French': 'fr', 'German': 'de',
             'Russian': 'ru', 'Chinese (Simplified)': 'zh-CN', 'Japanese': 'ja',
@@ -1075,7 +1218,6 @@ app.post('/api/ai/translate', async (req, res) => {
         };
         const targetCode = langMap[targetLanguage] || 'en';
 
-        // 5. Translate each block using Python bridge (Deep Translator)
         try {
             const inputTexts = blocks.map(b => b.text);
             const pythonBridge = spawn('python', ['translate_bridge.py']);
@@ -1110,7 +1252,6 @@ app.post('/api/ai/translate', async (req, res) => {
             res.json({ translations, targetLanguage });
         } catch (pyErr) {
             console.error('Python Bridge Error:', pyErr);
-            // Fallback: return untranslated blocks if bridge fails
             const translations = blocks.map(block => ({
                 original: block.text,
                 translated: block.text,
@@ -1127,14 +1268,11 @@ app.post('/api/ai/translate', async (req, res) => {
     }
 });
 
-// New Endpoint: Translate pre-extracted text strings only
+// Translate pre-extracted text strings (supports remote OCR service)
 app.post('/api/ai/translate-only', async (req, res) => {
     try {
-        console.log("== TRANSLATE ENDPOINT TRIGGERED ==");
-        console.log("Request body:", req.body);
         const { texts, targetLanguage, sourceLanguage } = req.body;
         if (!texts || !Array.isArray(texts)) {
-            console.log("Abort: No texts array found");
             return res.json({ translations: [] });
         }
 
@@ -1144,48 +1282,53 @@ app.post('/api/ai/translate-only', async (req, res) => {
             'Korean': 'ko', 'Italian': 'it', 'Portuguese': 'pt', 'Indonesian': 'id'
         };
         const targetCode = langMap[targetLanguage] || 'en';
-        console.log(`Resolved targetCode: ${targetCode} from ${targetLanguage}`);
 
+        // Remote OCR service mode
+        if (OCR_SERVICE_URL) {
+            try {
+                const remoteRes = await fetch(`${OCR_SERVICE_URL}/translate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        texts,
+                        target_lang: targetCode,
+                        source_lang: sourceLanguage || 'auto'
+                    })
+                });
+                const data = await remoteRes.json();
+                return res.json({ translations: data.translations || [] });
+            } catch (remoteErr) {
+                console.error('Remote translate service error, falling back to local:', remoteErr);
+            }
+        }
+
+        // Local Python bridge mode
         const pythonBridge = spawn('python', ['translate_bridge.py']);
         let resultData = '';
-
-        pythonBridge.stdout.on('data', (data) => {
-            resultData += data.toString();
-        });
-
         let errorData = '';
-        pythonBridge.stderr.on('data', (data) => {
-            errorData += data.toString();
-        });
 
-        const pythonPayload = JSON.stringify({
+        pythonBridge.stdout.on('data', (data) => { resultData += data.toString(); });
+        pythonBridge.stderr.on('data', (data) => { errorData += data.toString(); });
+
+        pythonBridge.stdin.write(JSON.stringify({
             mode: 'translate',
             texts: texts,
             target_lang: targetCode,
             source: sourceLanguage || 'auto'
-        });
-        console.log("Sending to python:", pythonPayload);
-        pythonBridge.stdin.write(pythonPayload + '\n');
+        }) + '\n');
         pythonBridge.stdin.end();
 
-        await new Promise((resolve) => {
-            pythonBridge.on('close', resolve);
-        });
-
-        console.log("Python STDOUT:", resultData);
-        console.log("Python STDERR:", errorData);
+        await new Promise((resolve) => { pythonBridge.on('close', resolve); });
 
         if (!resultData.trim()) {
-            console.error('Empty response from python bridge. Stderr:', errorData);
             return res.json({ translations: [] });
         }
 
         try {
             const translatedTexts = JSON.parse(resultData);
-            console.log("Final translated array:", translatedTexts);
             res.json({ translations: translatedTexts });
         } catch (e) {
-            console.error('JSON Parse error on translation output:', resultData, errorData);
+            console.error('JSON Parse error on translation output:', resultData);
             res.json({ translations: [] });
         }
     } catch (err: any) {
@@ -1194,30 +1337,39 @@ app.post('/api/ai/translate-only', async (req, res) => {
     }
 });
 
-// New Endpoint: PaddleOCR via Python Bridge
+// PaddleOCR endpoint (supports remote OCR service)
 app.post('/api/ai/ocr-paddle', async (req, res) => {
     try {
         const { url, lang } = req.body;
         if (!url) return res.status(400).json({ error: 'URL required' });
 
-        const { spawn } = await import('child_process');
-        const pythonProcess = spawn('python', ['translate_bridge.py']);
+        // Remote OCR service mode
+        if (OCR_SERVICE_URL) {
+            try {
+                const remoteRes = await fetch(`${OCR_SERVICE_URL}/ocr`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url, lang: lang || 'Japanese' })
+                });
+                const data = await remoteRes.json();
+                return res.json(data);
+            } catch (remoteErr) {
+                console.error('Remote OCR service error, falling back to local:', remoteErr);
+            }
+        }
 
+        // Local Python bridge mode
+        const pythonProcess = spawn('python', ['translate_bridge.py']);
         let resultData = '';
         let errorData = '';
 
-        pythonProcess.stdout.on('data', (data) => {
-            resultData += data.toString();
-        });
-
-        pythonProcess.stderr.on('data', (data) => {
-            errorData += data.toString();
-        });
+        pythonProcess.stdout.on('data', (data) => { resultData += data.toString(); });
+        pythonProcess.stderr.on('data', (data) => { errorData += data.toString(); });
 
         pythonProcess.stdin.write(JSON.stringify({
             mode: 'ocr',
             url,
-            lang: lang || 'Japanese' // Default for manga
+            lang: lang || 'Japanese'
         }));
         pythonProcess.stdin.end();
 
@@ -1243,4 +1395,9 @@ app.post('/api/ai/ocr-paddle', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    if (OCR_SERVICE_URL) {
+        console.log(`OCR Service: Remote (${OCR_SERVICE_URL})`);
+    } else {
+        console.log(`OCR Service: Local Python bridge`);
+    }
 });

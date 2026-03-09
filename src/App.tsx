@@ -45,6 +45,14 @@ import {
   Filter,
   Sparkles,
   ScrollText,
+  Maximize2,
+  Minimize2,
+  PanelRightOpen,
+  PanelRightClose,
+  Play,
+  MessageSquare,
+  Send,
+  Trash2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
@@ -170,7 +178,7 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       onBlur={() => !searchQuery && setIsSearchExpanded(false)}
-                      placeholder="Search manga titles..."
+                      placeholder={isAnimeMode ? "Search anime titles..." : "Search manga titles..."}
                       className="w-full bg-background-dark/50 border border-white/10 rounded-full py-2 pl-10 pr-8 text-sm text-white focus:ring-2 focus:ring-primary outline-none transition-all"
                     />
                     {searchQuery && (
@@ -211,17 +219,9 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
             {user && (
               <>
                 <button onClick={() => setView('library')} className={`text-sm font-medium transition-colors ${currentView === 'library' ? 'text-white border-b-2 border-primary pb-0.5' : 'text-slate-300 hover:text-white'}`}>Library</button>
-                <button onClick={() => setView('dashboard')} className={`text-sm font-medium transition-colors ${currentView === 'dashboard' ? 'text-white border-b-2 border-primary pb-0.5' : 'text-slate-300 hover:text-white'}`}>Dashboard</button>
                 {role === 'admin' && (
                   <button onClick={() => setView('admin')} className={`text-sm font-medium transition-colors ${currentView === 'admin' ? 'text-white border-b-2 border-primary pb-0.5' : 'text-emerald-400 hover:text-emerald-300 flex items-center gap-1'}`}><Settings size={14} /> Admin</button>
                 )}
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-sm font-bold"
-                >
-                  <CloudUpload size={16} />
-                  Import
-                </button>
               </>
             )}
             <input
@@ -278,14 +278,16 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
 
 const GENRE_LIST = ['Action', 'Adventure', 'Romance', 'Comedy', 'Horror', 'Fantasy', 'Sci-Fi', 'Mystery', 'Drama', 'Historical', 'Psychological', 'Supernatural', 'Slice of Life', 'Sports'];
 
-const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searchResults, onImportUrl, favoriteGenres = [] }: {
+const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searchResults, onImportUrl, favoriteGenres = [], isAnimeMode = false, setIsAnimeMode }: {
   setView: (v: View) => void,
   searchQuery: string,
   onSelectManga: (m: Manga) => void,
   trendingManga: Manga[],
   searchResults: Manga[],
   onImportUrl: (url: string) => void,
-  favoriteGenres?: string[]
+  favoriteGenres?: string[],
+  isAnimeMode?: boolean,
+  setIsAnimeMode?: (v: boolean) => void
 }) => {
   const [heroUrl, setHeroUrl] = useState('');
   const [importing, setImporting] = useState(false);
@@ -293,8 +295,35 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
   const [filteredManga, setFilteredManga] = useState<Manga[]>([]);
   const [filterLoading, setFilterLoading] = useState(false);
   const [isPersonalized, setIsPersonalized] = useState(favoriteGenres.length > 0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [pageData, setPageData] = useState<Manga[]>([]);
+  const [pageLoading, setPageLoading] = useState(false);
 
-  const displayManga = searchQuery.trim() ? searchResults : (activeGenres.length > 0 ? filteredManga : trendingManga);
+  // Fetch paginated trending data
+  useEffect(() => {
+    if (searchQuery.trim() || activeGenres.length > 0) return; // Skip when searching/filtering
+    setPageLoading(true);
+    const endpoint = isAnimeMode
+      ? `/api/anime/trending?page=${currentPage}`
+      : `/api/manga/trending?page=${currentPage}`;
+    fetch(endpoint).then(r => r.json()).then(data => {
+      if (data?.items) {
+        setPageData(data.items);
+        setTotalPages(Math.ceil(data.total / data.pageSize));
+      } else if (Array.isArray(data)) {
+        // Fallback for old response format
+        setPageData(data);
+        setTotalPages(1);
+      }
+      setPageLoading(false);
+    }).catch(() => setPageLoading(false));
+  }, [currentPage, isAnimeMode]);
+
+  // Reset page when switching modes
+  useEffect(() => { setCurrentPage(1); }, [isAnimeMode]);
+
+  const displayManga = searchQuery.trim() ? searchResults : (activeGenres.length > 0 ? filteredManga : (pageData.length > 0 ? pageData : trendingManga));
 
   useEffect(() => {
     if (activeGenres.length === 0) { setFilteredManga([]); return; }
@@ -344,7 +373,7 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
               className="mb-6 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 backdrop-blur-sm"
             >
               <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse"></span>
-              <span className="text-xs font-semibold text-primary uppercase tracking-wide">v2.0 Now Live: Better OCR</span>
+              <span className="text-xs font-semibold text-primary uppercase tracking-wide">PaddleOCR · Real-time Translation</span>
             </motion.div>
 
             <motion.h1
@@ -353,8 +382,8 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
               transition={{ delay: 0.1 }}
               className="max-w-4xl text-4xl font-black tracking-tight text-white sm:text-5xl md:text-6xl lg:text-7xl"
             >
-              Read Any Manga <br className="hidden sm:block" />
-              <span className="bg-gradient-to-r from-primary to-purple-400 bg-clip-text text-transparent">In Your Language.</span>
+              Explore Manga & Anime <br className="hidden sm:block" />
+              <span className="bg-gradient-to-r from-primary to-purple-400 bg-clip-text text-transparent">Translated Instantly.</span>
             </motion.h1>
 
             <motion.p
@@ -363,48 +392,46 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
               transition={{ delay: 0.2 }}
               className="mx-auto mt-6 max-w-2xl text-lg text-slate-300"
             >
-              Paste a URL and our advanced AI will clean, translate, and typeset the manga in seconds, preserving the original art style.
+              Browse thousands of manga with real-time OCR translation powered by PaddleOCR. Read raw manga in your language — no waiting for fan translations.
             </motion.p>
 
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              className="mt-10 w-full max-w-xl"
+              className="mt-10 flex flex-wrap justify-center gap-4"
             >
-              <div className="group relative flex items-center rounded-xl bg-background-dark/50 p-2 shadow-lg ring-1 ring-white/10 backdrop-blur-md focus-within:ring-primary focus-within:ring-2 transition-all">
-                <div className="flex h-10 w-12 items-center justify-center text-slate-400">
-                  <LinkIcon size={20} />
-                </div>
-                <input
-                  className="h-12 w-full bg-transparent text-white placeholder-slate-500 focus:outline-none border-none text-base"
-                  placeholder="Paste manga URL (Mangadex, Rawkuma, etc.)"
-                  type="text"
-                  value={heroUrl}
-                  onChange={(e) => setHeroUrl(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleImport()}
-                />
-                <button
-                  onClick={handleImport}
-                  disabled={importing || !heroUrl.trim()}
-                  className="absolute right-2 top-2 bottom-2 rounded-lg bg-primary px-6 text-sm font-bold text-white shadow-lg hover:bg-primary/90 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <span>Translate</span>
-                  <Zap size={16} />
-                </button>
-              </div>
-              <div className="mt-3 flex justify-center gap-6 text-xs text-slate-500">
-                <span className="flex items-center gap-1"><CheckCircle2 size={14} /> Auto-Cleaning</span>
-                <span className="flex items-center gap-1"><CheckCircle2 size={14} /> Smart In-painting</span>
-                <span className="flex items-center gap-1"><CheckCircle2 size={14} /> 50+ Languages</span>
-              </div>
+              <button
+                onClick={() => { setIsAnimeMode(false); document.getElementById('browse-section')?.scrollIntoView({ behavior: 'smooth' }); }}
+                className="px-8 py-4 rounded-xl bg-primary text-white font-bold text-lg shadow-lg shadow-primary/30 hover:bg-primary/90 transition-all flex items-center gap-2 group"
+              >
+                <BookOpen size={20} className="group-hover:scale-110 transition-transform" />
+                Browse Manga
+              </button>
+              <button
+                onClick={() => { setIsAnimeMode(true); document.getElementById('browse-section')?.scrollIntoView({ behavior: 'smooth' }); }}
+                className="px-8 py-4 rounded-xl border-2 border-[#FF6B6B]/50 text-[#FF6B6B] font-bold text-lg hover:bg-[#FF6B6B]/10 transition-all flex items-center gap-2 group"
+              >
+                <Play size={20} className="group-hover:scale-110 transition-transform" />
+                Watch Anime
+              </button>
+            </motion.div>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.5 }}
+              className="mt-6 flex justify-center gap-6 text-xs text-slate-500"
+            >
+              <span className="flex items-center gap-1"><CheckCircle2 size={14} /> PaddleOCR Engine</span>
+              <span className="flex items-center gap-1"><CheckCircle2 size={14} /> Real-time Translation</span>
+              <span className="flex items-center gap-1"><CheckCircle2 size={14} /> Fullscreen Reader</span>
             </motion.div>
           </div>
         </div>
       </section>
 
       {/* Trending / Browse */}
-      <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+      <section id="browse-section" className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-2xl font-bold text-white flex items-center gap-2">
             {isPersonalized ? <Sparkles className="text-primary" /> : <TrendingUp className="text-primary" />}
@@ -417,21 +444,24 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
           )}
         </div>
 
-        {/* Genre Filter Chips */}
-        <div className="flex flex-wrap gap-2 mb-6">
-          {GENRE_LIST.map(g => (
-            <button
-              key={g}
-              onClick={() => toggleGenre(g)}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all border ${activeGenres.includes(g)
-                ? 'bg-primary text-white border-primary shadow-lg shadow-primary/30'
-                : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-white'
-                }`}
-            >{g}</button>
-          ))}
-        </div>
+        {/* Genre Filter Chips — hide in anime mode since Sanka doesn't support genre filtering */}
+        {!isAnimeMode && (
+          <div className="flex flex-wrap gap-2 mb-6">
+            {GENRE_LIST.map(g => (
+              <button
+                key={g}
+                onClick={() => toggleGenre(g)}
+                className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all border ${activeGenres.includes(g)
+                  ? 'bg-primary text-white border-primary shadow-lg shadow-primary/30'
+                  : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-white'
+                  }`}
+              >{g}</button>
+            ))}
+          </div>
+        )}
 
         {displayManga.length > 0 ? (
+          <>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
             {displayManga.map((manga) => (
               <motion.div
@@ -451,19 +481,68 @@ const LandingPage = ({ setView, searchQuery, onSelectManga, trendingManga, searc
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
                     <button className="w-full rounded-lg bg-primary py-2 text-sm font-bold text-white shadow-lg">View Details</button>
                   </div>
-                  <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-xs text-white font-bold flex items-center gap-1">
-                    <Star size={12} className="text-yellow-400 fill-yellow-400" /> {manga.rating}
-                  </div>
+                  {!isAnimeMode && manga.rating && manga.rating !== '?' && (
+                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-xs text-white font-bold flex items-center gap-1">
+                      <Star size={12} className="text-yellow-400 fill-yellow-400" /> {manga.rating}
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <h3 className="font-bold text-white leading-tight group-hover:text-primary transition-colors">{manga.title}</h3>
-                  <div className="flex flex-wrap gap-2 text-xs text-slate-400">
-                    {manga.genre.map(g => <span key={g}>{g}</span>)}
-                  </div>
+                  {manga.genre && manga.genre.length > 0 && !(manga.genre.length === 1 && manga.genre[0] === 'Anime') && (
+                    <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+                      {manga.genre.map(g => <span key={g}>{g}</span>)}
+                    </div>
+                  )}
                 </div>
               </motion.div>
             ))}
           </div>
+
+          {/* Pagination Bar */}
+          {!searchQuery.trim() && activeGenres.length === 0 && totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 mt-12 mb-4">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-2 rounded-lg text-sm font-bold border border-white/10 bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+              >«</button>
+              {(() => {
+                const pages: (number | string)[] = [];
+                const maxVisible = 7;
+                if (totalPages <= maxVisible) {
+                  for (let i = 1; i <= totalPages; i++) pages.push(i);
+                } else {
+                  pages.push(1);
+                  if (currentPage > 3) pages.push('...');
+                  for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) pages.push(i);
+                  if (currentPage < totalPages - 2) pages.push('...');
+                  pages.push(totalPages);
+                }
+                return pages.map((p, idx) =>
+                  typeof p === 'string' ? (
+                    <span key={`ellipsis-${idx}`} className="px-2 text-slate-500 text-sm">…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      onClick={() => setCurrentPage(p)}
+                      className={`w-10 h-10 rounded-lg text-sm font-bold transition-all border ${
+                        p === currentPage
+                          ? 'bg-primary text-white border-primary shadow-lg shadow-primary/30'
+                          : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-white'
+                      }`}
+                    >{p}</button>
+                  )
+                );
+              })()}
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-2 rounded-lg text-sm font-bold border border-white/10 bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+              >»</button>
+            </div>
+          )}
+          </>
         ) : (
           <div className="text-center py-20">
             <p className="text-slate-400 text-lg">No manga found matching your search.</p>
@@ -957,7 +1036,7 @@ const LoginPage = ({ setView }: { setView: (v: View) => void }) => {
       setError(error.message);
       setLoading(false);
     } else {
-      setView('dashboard');
+      setView('landing');
     }
   };
 
@@ -1028,6 +1107,7 @@ const SignupPage = ({ setView }: { setView: (v: View) => void }) => {
   const [lastName, setLastName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1042,7 +1122,8 @@ const SignupPage = ({ setView }: { setView: (v: View) => void }) => {
       setError(error.message);
       setLoading(false);
     } else {
-      setView('dashboard');
+      setSuccessMsg('Account created successfully! Please check your email inbox to confirm your account before logging in.');
+      setLoading(false);
     }
   };
 
@@ -1064,6 +1145,12 @@ const SignupPage = ({ setView }: { setView: (v: View) => void }) => {
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-sm rounded-lg flex items-center gap-2">
             <AlertCircle size={16} /> {error}
+          </div>
+        )}
+        
+        {successMsg && (
+          <div className="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm rounded-lg flex items-center gap-2">
+            <CheckCircle size={16} /> {successMsg}
           </div>
         )}
 
@@ -1117,8 +1204,8 @@ const SignupPage = ({ setView }: { setView: (v: View) => void }) => {
           <p className="text-[10px] text-slate-500 text-center px-4">
             By signing up, you agree to our Terms of Service and Privacy Policy.
           </p>
-          <button disabled={loading} className="w-full bg-primary text-white font-bold py-3 rounded-lg shadow-lg hover:bg-primary/90 transition-all mt-6 disabled:opacity-50">
-            {loading ? 'Creating Account...' : 'Create Account'}
+          <button onClick={() => setView('login')} disabled={loading} className="w-full bg-primary text-white font-bold py-3 rounded-lg shadow-lg hover:bg-primary/90 transition-all mt-6 disabled:opacity-50">
+            {loading ? 'Creating Account...' : (successMsg ? 'Go to Login' : 'Create Account')}
           </button>
         </form>
 
@@ -1155,6 +1242,13 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
   const [ocrLanguage, setOcrLanguage] = useState<string>('japan'); // Default to PaddleOCR japan model identifier
   const [imageScale, setImageScale] = useState({ w: 800, h: 1200 });
   const progressTimerRef = React.useRef<any>(null);
+
+  // Fullscreen reader state
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showFsTranscript, setShowFsTranscript] = useState(false);
+  const [fsControlsVisible, setFsControlsVisible] = useState(true);
+  const fsControlsTimer = React.useRef<any>(null);
+  const touchStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
   // Load chapters, then restore progress
   useEffect(() => {
@@ -1224,12 +1318,8 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
       .then(r => r.json())
       .then((data: string[]) => {
         if (data && data.length > 0) {
-          if (source === 'mangabuddy') {
-            // Route MangaBuddy images through Node to spoof the referer and bypass HTTP 403 Forbidden
-            setPages(data.map(url => `/api/manga/image-proxy?url=${encodeURIComponent(url)}`));
-          } else {
-            setPages(data);
-          }
+          // Always route images through Node to spoof the referer and bypass CORS/403 Forbidden
+          setPages(data.map(url => `/api/manga/image-proxy?url=${encodeURIComponent(url)}`));
           setStatusText('');
         } else {
           setStatusText('No pages found for this chapter.');
@@ -1281,11 +1371,17 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
           setOcrProgress(Math.floor(prog));
         }, 400);
 
-        const ocrRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/ai/ocr-paddle`, {
+        // Unwrap proxy URL back to original for OCR (Python needs a real http URL)
+        let ocrUrl = pages[currentPage];
+        if (ocrUrl.startsWith('/api/manga/image-proxy?url=')) {
+          ocrUrl = decodeURIComponent(ocrUrl.replace('/api/manga/image-proxy?url=', ''));
+        }
+
+        const ocrRes = await fetch('/api/ai/ocr-paddle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            url: pages[currentPage],
+            url: ocrUrl,
             lang: ocrLanguage
           })
         });
@@ -1306,7 +1402,7 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
         }
 
         setStatusText('Translating Script...');
-        const transRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/ai/translate-only`, {
+        const transRes = await fetch('/api/ai/translate-only', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1375,6 +1471,55 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
   const handlePageChange = (newPage: number) => {
     if (!checkNavigation()) return;
     setCurrentPage(newPage);
+  };
+
+  // Fullscreen keyboard handler
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setIsFullscreen(false); return; }
+      if (e.key === 'ArrowRight' || e.key === 'd') handlePageChange(Math.min(pages.length - 1, currentPage + 1));
+      if (e.key === 'ArrowLeft' || e.key === 'a') handlePageChange(Math.max(0, currentPage - 1));
+      // Show controls briefly on any keypress
+      setFsControlsVisible(true);
+      if (fsControlsTimer.current) clearTimeout(fsControlsTimer.current);
+      fsControlsTimer.current = setTimeout(() => setFsControlsVisible(false), 3000);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isFullscreen, currentPage, pages.length]);
+
+  // Auto-hide fullscreen controls after 3s
+  useEffect(() => {
+    if (!isFullscreen) return;
+    setFsControlsVisible(true);
+    fsControlsTimer.current = setTimeout(() => setFsControlsVisible(false), 3000);
+    return () => { if (fsControlsTimer.current) clearTimeout(fsControlsTimer.current); };
+  }, [isFullscreen]);
+
+  const handleFsTouchStart = (e: React.TouchEvent) => {
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+  const handleFsTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStartRef.current) return;
+    const dx = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const dy = e.changedTouches[0].clientY - touchStartRef.current.y;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+      if (dx < 0) handlePageChange(Math.min(pages.length - 1, currentPage + 1));
+      else handlePageChange(Math.max(0, currentPage - 1));
+    }
+    touchStartRef.current = null;
+  };
+
+  const handleFsClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    if (x < 0.35) handlePageChange(Math.max(0, currentPage - 1));
+    else if (x > 0.65) handlePageChange(Math.min(pages.length - 1, currentPage + 1));
+    else {
+      setFsControlsVisible(v => !v);
+      if (fsControlsTimer.current) clearTimeout(fsControlsTimer.current);
+    }
   };
 
   const handleLangChange = (lang: string) => {
@@ -1495,6 +1640,10 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
               <Globe size={14} className="text-primary" />
               <span className="text-[11px] font-bold text-white">{targetLanguage}</span>
             </div>
+            <div className="h-6 w-px bg-white/10 mx-1" />
+            <button onClick={() => setIsFullscreen(true)} className="p-2 hover:bg-white/5 rounded-full text-slate-400 hover:text-white transition-colors" title="Fullscreen Reader">
+              <Maximize2 size={20} />
+            </button>
           </div>
         </div>
       </section>
@@ -1663,6 +1812,179 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
           </button>
         </div>
       </aside>
+
+      {/* ============ FULLSCREEN READER OVERLAY ============ */}
+      <AnimatePresence>
+        {isFullscreen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black flex"
+            onTouchStart={handleFsTouchStart}
+            onTouchEnd={handleFsTouchEnd}
+          >
+            {/* Main image area (click zones) */}
+            <div className="flex-1 relative flex items-center justify-center overflow-hidden cursor-pointer select-none" onClick={handleFsClick}>
+              <div className="relative inline-block max-w-full max-h-full">
+                {pages.length > 0 ? (
+                  <img
+                    src={pages[currentPage]}
+                    alt="Manga Page"
+                    className="max-w-full max-h-[100vh] object-contain block"
+                    referrerPolicy="no-referrer"
+                    loading="eager"
+                    draggable={false}
+                    onLoad={(e) => setImageScale({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+                  />
+                ) : (
+                  <div className="text-slate-500 flex flex-col items-center py-32">
+                    <RefreshCw size={32} className="animate-spin mb-4 text-primary" />
+                    <p>Loading...</p>
+                  </div>
+                )}
+
+                {/* Script markers in fullscreen — positioned relative to image wrapper */}
+                {overlayActive && pages.length > 0 && translations.map((t, idx) => {
+                  const left = (t.x / imageScale.w) * 100;
+                  const top = (t.y / imageScale.h) * 100;
+                  return (
+                    <div
+                      key={idx}
+                      style={{ top: `${top}%`, left: `${left}%` }}
+                      className="absolute z-20 w-5 h-5 -ml-2.5 -mt-2.5 flex items-center justify-center rounded-full text-[10px] font-black text-white bg-primary/80 border-2 border-white/50 backdrop-blur-sm pointer-events-none"
+                    >
+                      {t.id}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Click zone indicators (shown briefly) */}
+              {fsControlsVisible && (
+                <>
+                  <div className="absolute left-0 top-0 bottom-0 w-[35%] flex items-center justify-start pl-6 pointer-events-none">
+                    <div className="bg-white/5 backdrop-blur-sm rounded-full p-3">
+                      <ChevronLeft size={28} className="text-white/40" />
+                    </div>
+                  </div>
+                  <div className="absolute right-0 top-0 bottom-0 w-[35%] flex items-center justify-end pr-6 pointer-events-none">
+                    <div className="bg-white/5 backdrop-blur-sm rounded-full p-3">
+                      <ChevronRight size={28} className="text-white/40" />
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Fullscreen translation sidebar (toggleable) */}
+            <AnimatePresence>
+              {showFsTranscript && (
+                <motion.aside
+                  initial={{ x: 320 }}
+                  animate={{ x: 0 }}
+                  exit={{ x: 320 }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                  className="w-80 bg-surface-dark/95 backdrop-blur-md border-l border-white/10 flex flex-col shrink-0 overflow-hidden"
+                >
+                  <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-primary">
+                      <Brain size={16} />
+                      <span className="text-xs font-bold uppercase tracking-widest">Transcript</span>
+                    </div>
+                    <button onClick={() => setShowFsTranscript(false)} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
+                      <PanelRightClose size={14} />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+                    {translations.length === 0 ? (
+                      <p className="text-slate-500 text-xs text-center py-8">{statusText || 'No translations yet.'}</p>
+                    ) : (
+                      translations.map(t => (
+                        <div key={t.id} className="p-3 rounded-xl bg-card-dark border border-white/5 space-y-2">
+                          <div className="flex items-start gap-2">
+                            <span className="shrink-0 w-5 h-5 bg-primary text-[9px] font-black text-white rounded-full flex items-center justify-center">{t.id}</span>
+                            <div className="text-[11px] text-slate-400 italic leading-snug">"{t.original}"</div>
+                          </div>
+                          <div className="text-xs text-white font-medium leading-relaxed pl-7 border-t border-white/5 pt-2">
+                            {t.translated}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </motion.aside>
+              )}
+            </AnimatePresence>
+
+            {/* Top controls bar */}
+            <motion.div
+              initial={false}
+              animate={{ opacity: fsControlsVisible ? 1 : 0, y: fsControlsVisible ? 0 : -60 }}
+              transition={{ duration: 0.2 }}
+              className="absolute top-0 left-0 right-0 flex items-center justify-between px-6 py-4 bg-gradient-to-b from-black/80 to-transparent z-40 pointer-events-auto"
+            >
+              <div className="flex items-center gap-3">
+                <h3 className="text-white font-bold text-sm truncate max-w-[300px]">{manga?.title || 'Reader'}</h3>
+                <span className="text-xs text-slate-400 bg-white/10 px-2 py-0.5 rounded-full">Ch {currentChapter?.chapter || '?'} · {pages.length ? currentPage + 1 : 0}/{pages.length}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowFsTranscript(v => !v)}
+                  className={`p-2 rounded-lg transition-colors ${showFsTranscript ? 'bg-primary/20 text-primary' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                  title="Toggle Translation"
+                >
+                  {showFsTranscript ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+                </button>
+                <button
+                  onClick={() => setOverlayActive(v => !v)}
+                  className={`p-2 rounded-lg transition-colors ${overlayActive ? 'bg-primary/20 text-primary' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                  title="Toggle Markers"
+                >
+                  <Brain size={18} />
+                </button>
+                <button
+                  onClick={() => setIsFullscreen(false)}
+                  className="p-2 rounded-lg bg-white/10 text-white hover:bg-red-500/20 hover:text-red-400 transition-colors"
+                  title="Exit Fullscreen"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </motion.div>
+
+            {/* Bottom controls bar */}
+            <motion.div
+              initial={false}
+              animate={{ opacity: fsControlsVisible ? 1 : 0, y: fsControlsVisible ? 0 : 60 }}
+              transition={{ duration: 0.2 }}
+              className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-t from-black/80 to-transparent z-40"
+            >
+              <button onClick={goPrevChapter} disabled={chapterIndex === 0} className="p-2 rounded-lg bg-white/10 text-white hover:bg-white/20 transition-colors disabled:opacity-30 flex items-center gap-1 text-xs font-bold">
+                <ChevronLeft size={14} /> Prev Ch
+              </button>
+              <button onClick={() => handlePageChange(Math.max(0, currentPage - 1))} disabled={currentPage === 0} className="p-2.5 rounded-lg bg-white/10 text-white hover:bg-white/20 transition-colors disabled:opacity-30">
+                <ChevronLeft size={20} />
+              </button>
+
+              {/* Page progress bar */}
+              <div className="flex items-center gap-2 bg-white/10 rounded-full px-4 py-2">
+                <span className="text-xs font-bold text-white whitespace-nowrap">{pages.length ? currentPage + 1 : 0} / {pages.length}</span>
+                <div className="w-32 h-1 bg-white/20 rounded-full overflow-hidden">
+                  <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: pages.length ? `${((currentPage + 1) / pages.length) * 100}%` : '0%' }} />
+                </div>
+              </div>
+
+              <button onClick={() => handlePageChange(Math.min(pages.length - 1, currentPage + 1))} disabled={currentPage === pages.length - 1} className="p-2.5 rounded-lg bg-white/10 text-white hover:bg-white/20 transition-colors disabled:opacity-30">
+                <ChevronRight size={20} />
+              </button>
+              <button onClick={goNextChapter} disabled={chapterIndex >= chapters.length - 1} className="p-2 rounded-lg bg-white/10 text-white hover:bg-white/20 transition-colors disabled:opacity-30 flex items-center gap-1 text-xs font-bold">
+                Next Ch <ChevronRight size={14} />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -1880,63 +2202,12 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
             <p className="text-xs text-slate-500 mt-2">Select your favorite genres to improve your Explore page recommendations.</p>
           </div>
 
-          <div className="pt-8 mt-8 border-t border-white/10">
-            <div className="flex items-center gap-2 mb-4">
-              <Shield size={20} className="text-primary" />
-              <h3 className="text-sm font-black uppercase tracking-widest text-white">Manage API Key (BYOK)</h3>
-            </div>
 
-            <div className="bg-background-dark/50 rounded-2xl p-6 border border-white/5 space-y-4">
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-bold text-slate-400 uppercase">Gemini API Key</label>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <input
-                      type="password"
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      placeholder={hasExistingKey ? "AIza••••••••••••••••••••xR4" : "Paste your Gemini API Key here"}
-                      className="w-full bg-background-dark border border-white/10 rounded-xl py-3 px-4 text-white focus:ring-2 focus:ring-primary outline-none transition-all pr-12"
-                    />
-                    <Key className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-600" size={18} />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSaveKey}
-                    disabled={keyLoading || !apiKey}
-                    className="bg-primary text-white px-6 rounded-xl font-bold hover:bg-primary/90 transition-all disabled:opacity-50 whitespace-nowrap"
-                  >
-                    {keyLoading ? '...' : 'Save Key'}
-                  </button>
-                </div>
-              </div>
-
-              {hasExistingKey && (
-                <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/5">
-                  <div className="flex items-center gap-2 text-xs text-slate-400 font-medium">
-                    <CheckCircle2 size={14} className="text-green-500" />
-                    <span>Vault Encryption Active: Gemini API Key is stored periodically.</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleRemoveKey}
-                    className="text-[10px] text-red-400 hover:text-red-300 font-bold uppercase tracking-wider"
-                  >
-                    Remove Key
-                  </button>
-                </div>
-              )}
-              <p className="text-[10px] text-slate-500">
-                Your API key is encrypted at rest using Supabase Vault and is never exposed to the frontend after saving.
-                It is used exclusively by the backend to perform translations.
-              </p>
-            </div>
-          </div>
 
           <div className="pt-6 border-t border-white/10 flex justify-end gap-3">
             <button
               type="button"
-              onClick={() => setView('dashboard')}
+              onClick={() => setView('landing')}
               className="px-6 py-3 rounded-xl border border-white/10 text-white font-bold hover:bg-white/5 transition-colors"
             >
               Cancel
@@ -1955,14 +2226,136 @@ const ProfilePage = ({ user, setView }: { user: User, setView: (v: View) => void
   );
 };
 
-const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: User | null }) => {
+const FeedbackModal = ({ isOpen, onClose, user }: { isOpen: boolean, onClose: () => void, user: User | null }) => {
+  const [message, setMessage] = useState('');
+  const [category, setCategory] = useState('bug');
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim()) return;
+    setLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ message, category })
+      });
+      if (res.ok) {
+        setSuccess(true);
+        setTimeout(() => {
+          onClose();
+          setSuccess(false);
+          setMessage('');
+        }, 2000);
+      } else {
+        alert('Failed to submit feedback');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('An error occurred');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 px-4 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="relative w-full max-w-md overflow-hidden rounded-2xl bg-card-dark shadow-2xl border border-white/10"
+      >
+        <div className="flex items-center justify-between border-b border-white/10 p-4">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <MessageSquare size={18} className="text-primary" />
+            Send Feedback
+          </h2>
+          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-white/5 hover:text-white transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-6">
+          {success ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="mb-4 rounded-full bg-emerald-500/20 p-3 text-emerald-400">
+                <CheckCircle size={32} />
+              </div>
+              <h3 className="text-lg font-bold text-white">Thank You!</h3>
+              <p className="mt-2 text-sm text-slate-400">Your feedback helps us improve MangaTranslate.</p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400">Category</label>
+                <select 
+                  value={category} 
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-background-dark/50 px-4 py-3 text-sm text-white focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="bug">Report a Bug</option>
+                  <option value="translation">Translation Issue</option>
+                  <option value="suggestion">Feature Suggestion</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400">Message</label>
+                <textarea
+                  required
+                  rows={4}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="Tell us what you think..."
+                  className="w-full rounded-xl border border-white/10 bg-background-dark/50 px-4 py-3 text-sm text-white focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !message.trim()}
+                className="w-full rounded-xl bg-primary py-3 px-4 font-bold text-white shadow-lg shadow-primary/20 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {loading ? <RefreshCw className="animate-spin" size={18} /> : (
+                  <>
+                    <Send size={18} />
+                    Submit Feedback
+                  </>
+                )}
+              </button>
+            </form>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const AdminDashboard = ({ setView, user, addToast }: { setView: (v: View) => void, user: User | null, addToast: (msg: string, type?: Toast['type']) => void }) => {
   const [primaryColor, setPrimaryColor] = useState('#8b5cf6');
   const [backgroundDark, setBackgroundDark] = useState('#191022');
   const [users, setUsers] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
+  const [userSearch, setUserSearch] = useState('');
+  const [feedbacks, setFeedbacks] = useState<any[]>([]);
+  const [loadingFeedback, setLoadingFeedback] = useState(true);
+  const [feedbackCategory, setFeedbackCategory] = useState('all');
+  const [feedbackStatus, setFeedbackStatus] = useState('all');
+
+  const filteredFeedbacks = feedbacks.filter(f => 
+    (feedbackCategory === 'all' || f.category === feedbackCategory) &&
+    (feedbackStatus === 'all' || (feedbackStatus === 'unread' ? (!f.status || f.status === 'unread') : f.status === feedbackStatus))
+  );
 
   useEffect(() => {
     fetchUsers();
+    fetchFeedback();
     fetch('/api/settings').then(res => res.json()).then(data => {
       if (data) {
         setPrimaryColor(data.primary_color || '#8b5cf6');
@@ -1985,11 +2378,22 @@ const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: U
       if (res.ok) {
         document.documentElement.style.setProperty('--app-primary', primaryColor);
         document.documentElement.style.setProperty('--app-bg-dark', backgroundDark);
-        alert('Settings saved and applied!');
+        addToast('Settings saved and applied successfully!', 'success');
+      } else {
+        addToast('Failed to save settings', 'error');
       }
     } catch (err) {
       console.error(err);
+      addToast('Network error while saving settings', 'error');
     }
+  };
+
+  const handleResetSettings = () => {
+    setPrimaryColor('#8b5cf6');
+    setBackgroundDark('#191022');
+    document.documentElement.style.setProperty('--app-primary', '#8b5cf6');
+    document.documentElement.style.setProperty('--app-bg-dark', '#191022');
+    addToast('Settings reset to default. Click Save to persist.', 'info');
   };
 
   const fetchUsers = async () => {
@@ -2004,6 +2408,57 @@ const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: U
     }
     setLoadingUsers(false);
   };
+
+  const fetchFeedback = async () => {
+    setLoadingFeedback(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
+      const res = await fetch('/api/admin/feedback', { headers });
+      if (res.ok) setFeedbacks(await res.json());
+    } catch (err) {
+      console.error(err);
+    }
+    setLoadingFeedback(false);
+  };
+
+  const handleDeleteFeedback = async (id: string) => {
+    if (!confirm('Delete this feedback?')) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
+      const res = await fetch(`/api/admin/feedback/${id}`, { method: 'DELETE', headers });
+      if (res.ok) {
+        setFeedbacks(feedbacks.filter(f => f.id !== id));
+        addToast('Feedback deleted.', 'success');
+      } else {
+        addToast('Failed to delete feedback', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      addToast('Network error deleting feedback', 'error');
+    }
+  };
+
+  const handleUpdateFeedbackStatus = async (id: string, status: 'unread' | 'read' | 'completed') => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+      const res = await fetch(`/api/admin/feedback/${id}/status`, { method: 'PATCH', headers, body: JSON.stringify({ status }) });
+      if (res.ok) {
+        setFeedbacks(feedbacks.map(f => f.id === id ? { ...f, status } : f));
+        addToast(`Marked as ${status}`, 'success');
+      } else {
+        addToast('Failed to update status', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      addToast('Network error updating status', 'error');
+    }
+  };
+
+  const [selectedFeedback, setSelectedFeedback] = useState<any>(null);
 
   const handleDeleteUser = async (id: string, email: string) => {
     if (!confirm(`Are you sure you want to delete ${email}?`)) return;
@@ -2054,21 +2509,38 @@ const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: U
                 <span className="text-slate-300 font-mono text-sm uppercase">{backgroundDark}</span>
               </div>
             </div>
-            <button onClick={saveSettings} className="w-full bg-white/5 border border-white/10 hover:bg-white/10 text-white py-2 rounded-lg font-bold transition-all mt-4 text-sm">
-              Save Theme Settings
-            </button>
+            <div className="flex gap-3 mt-4">
+              <button onClick={saveSettings} className="flex-1 bg-primary text-white py-2.5 rounded-lg font-bold transition-all text-sm hover:bg-primary/90 shadow-lg shadow-primary/20">
+                Save Theme Settings
+              </button>
+              <button onClick={handleResetSettings} className="px-4 bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg font-bold transition-all text-sm" title="Revert to Default">
+                Default
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Users Panel */}
         <div className="bg-card-dark border border-white/10 rounded-2xl p-6 lg:col-span-2">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               <Brain size={18} className="text-emerald-400" /> User Management
             </h2>
-            <button onClick={fetchUsers} className="text-slate-400 hover:text-white transition-colors">
-              <RefreshCw size={16} className={loadingUsers ? 'animate-spin text-emerald-400' : ''} />
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input 
+                  type="text" 
+                  placeholder="Search users..." 
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                  className="pl-8 pr-4 py-1.5 bg-background-dark border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-primary w-48"
+                />
+              </div>
+              <button onClick={fetchUsers} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors">
+                <RefreshCw size={16} className={loadingUsers ? 'animate-spin text-emerald-400' : ''} />
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -2085,9 +2557,11 @@ const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: U
                 {loadingUsers ? (
                   <tr><td colSpan={4} className="text-center py-8 text-slate-500">Loading users...</td></tr>
                 ) : users.length === 0 ? (
-                  <tr><td colSpan={4} className="text-center py-8 text-slate-500">No users found.</td></tr>
+                  <tr><td colSpan={4} className="text-center py-8 text-slate-500">No users found in database.</td></tr>
+                ) : users.filter(u => u.email?.toLowerCase().includes(userSearch.toLowerCase()) || u.profile?.username?.toLowerCase().includes(userSearch.toLowerCase())).length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-8 text-slate-500">No matching search results.</td></tr>
                 ) : (
-                  users.map((u) => (
+                  users.filter(u => u.email?.toLowerCase().includes(userSearch.toLowerCase()) || u.profile?.username?.toLowerCase().includes(userSearch.toLowerCase())).map((u) => (
                     <tr key={u.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
                       <td className="px-4 py-3">
                         <div className="font-bold text-white">{u.profile?.username || 'Unknown'}</div>
@@ -2119,6 +2593,155 @@ const AdminDashboard = ({ setView, user }: { setView: (v: View) => void, user: U
           </div>
         </div>
       </div>
+
+      <div className="mt-6 bg-card-dark border border-white/10 rounded-2xl p-0 overflow-hidden">
+        <div className="p-6 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <MessageSquare size={18} className="text-primary" /> User Feedback
+          </h2>
+          <div className="flex items-center gap-3">
+            <select
+              value={feedbackCategory}
+              onChange={(e) => setFeedbackCategory(e.target.value)}
+              className="px-3 py-1.5 bg-background-dark border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-primary"
+            >
+              <option value="all">All Categories</option>
+              <option value="bug">Bug</option>
+              <option value="translation">Translation</option>
+              <option value="suggestion">Suggestion</option>
+              <option value="other">Other</option>
+            </select>
+            <select
+              value={feedbackStatus}
+              onChange={(e) => setFeedbackStatus(e.target.value)}
+              className="px-3 py-1.5 bg-background-dark border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-primary"
+            >
+              <option value="all">All Statuses</option>
+              <option value="unread">Unread</option>
+              <option value="read">Read</option>
+              <option value="completed">Completed</option>
+            </select>
+            <button onClick={fetchFeedback} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors">
+              <RefreshCw size={16} className={loadingFeedback ? "animate-spin text-primary" : ""} />
+            </button>
+          </div>
+        </div>
+        <div className="p-6 overflow-x-auto">
+          <table className="w-full text-left text-sm text-slate-300">
+            <thead className="bg-white/5 text-xs uppercase text-slate-400">
+              <tr>
+                <th className="px-4 py-3 rounded-tl-lg">User</th>
+                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Message</th>
+                <th className="px-4 py-3">Date</th>
+                <th className="px-4 py-3 text-right rounded-tr-lg">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingFeedback ? (
+                <tr><td colSpan={5} className="text-center py-8 text-slate-500">Loading feedback...</td></tr>
+              ) : feedbacks.length === 0 ? (
+                <tr><td colSpan={5} className="text-center py-8 text-slate-500">No feedback found.</td></tr>
+              ) : filteredFeedbacks.length === 0 ? (
+                <tr><td colSpan={5} className="text-center py-8 text-slate-500">No feedback matches these filters.</td></tr>
+              ) : (
+                filteredFeedbacks.map((f) => (
+                  <tr key={f.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="font-bold text-white">{f.username}</div>
+                      <div className="text-xs text-slate-500">{f.email}</div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-white/10 text-slate-300 border border-white/10">
+                        {f.category}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 min-w-[300px]">
+                      <div className="line-clamp-2 max-w-sm">{f.message}</div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-slate-400">
+                      <div className="flex flex-col gap-1">
+                        <span>{new Date(f.created_at).toLocaleDateString()}</span>
+                        {f.status && (
+                           <span className={`text-[10px] font-bold uppercase ${f.status === 'completed' ? 'text-emerald-400' : f.status === 'read' ? 'text-primary' : 'text-slate-500'}`}>
+                              {f.status}
+                           </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => setSelectedFeedback(f)}
+                          className="p-1.5 rounded bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+                          title="View Message"
+                        >
+                          <MessageSquare size={14} />
+                        </button>
+                        {f.status !== 'completed' && (
+                          <button
+                            onClick={() => handleUpdateFeedbackStatus(f.id, f.status === 'unread' ? 'read' : 'completed')}
+                            className="p-1.5 rounded bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 hover:text-emerald-300 transition-colors"
+                            title={f.status === 'unread' ? "Mark as Read" : "Mark as Completed"}
+                          >
+                            <CheckCircle size={14} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDeleteFeedback(f.id)}
+                          className="p-1.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors"
+                          title="Delete feedback"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* View Feedback Modal */}
+      {selectedFeedback && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-lg bg-card-dark border border-white/10 rounded-2xl overflow-hidden shadow-2xl"
+          >
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">Feedback Details</h2>
+              <button onClick={() => setSelectedFeedback(null)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/5 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6">
+              <div className="flex gap-4 mb-4 text-sm text-slate-400">
+                <div><strong>User:</strong> {selectedFeedback.username} ({selectedFeedback.email})</div>
+                <div><strong>Category:</strong> <span className="uppercase">{selectedFeedback.category}</span></div>
+              </div>
+              <div className="bg-background-dark p-4 rounded-lg border border-white/5 text-slate-300 text-sm whitespace-pre-wrap leading-relaxed max-h-96 overflow-y-auto">
+                {selectedFeedback.message}
+              </div>
+            </div>
+            <div className="p-4 border-t border-white/10 bg-background-dark/50 flex justify-end gap-3">
+              {selectedFeedback.status === 'unread' && (
+                 <button onClick={() => { handleUpdateFeedbackStatus(selectedFeedback.id, 'read'); setSelectedFeedback(null); }} className="px-4 py-2 rounded-lg bg-primary/20 text-primary font-bold text-sm hover:bg-primary/30 transition-colors">
+                   Mark as Read
+                 </button>
+              )}
+              {selectedFeedback.status !== 'completed' && (
+                 <button onClick={() => { handleUpdateFeedbackStatus(selectedFeedback.id, 'completed'); setSelectedFeedback(null); }} className="px-4 py-2 rounded-lg bg-emerald-500/20 text-emerald-400 font-bold text-sm hover:bg-emerald-500/30 transition-colors flex items-center gap-2">
+                   <CheckCircle size={16} /> Mark Completed
+                 </button>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };
@@ -2336,6 +2959,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedManga, setSelectedManga] = useState<Manga | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<'user' | 'admin'>('user');
@@ -2389,7 +3013,8 @@ export default function App() {
       fetch('/api/anime/trending')
         .then(r => r.json())
         .then(data => {
-          if (Array.isArray(data)) setTrendingAnime(data);
+          const items = data?.items || (Array.isArray(data) ? data : []);
+          if (items.length > 0) setTrendingAnime(items);
         })
         .catch(console.error);
     }
@@ -2424,9 +3049,13 @@ export default function App() {
         fetch('/api/history', { headers }).then(r => r.json()),
       ]);
 
-      if (trendingRes.status === 'fulfilled' && Array.isArray(trendingRes.value)) {
-        setTrendingManga(trendingRes.value);
-        localStorage.setItem('manga_trending_cache', JSON.stringify(trendingRes.value));
+      if (trendingRes.status === 'fulfilled') {
+        const val = trendingRes.value;
+        const items = val?.items || (Array.isArray(val) ? val : []);
+        if (items.length > 0) {
+          setTrendingManga(items);
+          localStorage.setItem('manga_trending_cache', JSON.stringify(items));
+        }
       }
       if (tasksRes.status === 'fulfilled' && Array.isArray(tasksRes.value)) setTasks(tasksRes.value);
       if (historyRes.status === 'fulfilled' && Array.isArray(historyRes.value)) setHistoryList(historyRes.value);
@@ -2441,13 +3070,33 @@ export default function App() {
       return;
     }
     const timeout = setTimeout(() => {
-      fetch(`/api/manga/search?q=${encodeURIComponent(searchQuery)}`)
+      const endpoint = isAnimeMode
+        ? `/api/anime/search?q=${encodeURIComponent(searchQuery)}`
+        : `/api/manga/search?q=${encodeURIComponent(searchQuery)}`;
+      fetch(endpoint)
         .then(res => res.json())
-        .then(data => setSearchResults(data))
+        .then(data => {
+          if (isAnimeMode && Array.isArray(data)) {
+            // Map Sanka anime results to Manga card shape
+            setSearchResults(data.map((a: any) => ({
+              id: a.animeId || a.id,
+              title: a.title,
+              cover: a.poster || a.cover,
+              genre: a.genreList?.map((g: any) => g.title) || [],
+              rating: a.score || null,
+              status: a.status || 'Unknown'
+            })));
+          } else if (data?.items) {
+            // Paginated response
+            setSearchResults(data.items);
+          } else {
+            setSearchResults(Array.isArray(data) ? data : []);
+          }
+        })
         .catch(console.error);
     }, 500);
     return () => clearTimeout(timeout);
-  }, [searchQuery]);
+  }, [searchQuery, isAnimeMode]);
 
   const handleSelectManga = async (manga: Manga) => {
     setSelectedManga(manga);
@@ -2567,17 +3216,17 @@ export default function App() {
             exit={{ opacity: 0, x: -10 }}
             transition={{ duration: 0.2 }}
           >
-            {view === 'landing' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={isAnimeMode ? trendingAnime : trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />}
+            {view === 'landing' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={isAnimeMode ? trendingAnime : trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} isAnimeMode={isAnimeMode} setIsAnimeMode={setIsAnimeMode} />}
             {view === 'dashboard' && (user ? <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} /> : <LoginPage setView={setView} />)}
             {view === 'reader' && <Reader setView={setView} manga={selectedManga} session={session} source={selectedSource} />}
             {view === 'library' && (user ? <LibraryPage setView={setView} onSelectManga={handleSelectManga} user={user} session={session} /> : <LoginPage setView={setView} />)}
             {view === 'login' && (!user ? <LoginPage setView={setView} /> : <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} />)}
             {view === 'signup' && (!user ? <SignupPage setView={setView} /> : <Dashboard setView={setView} onUpload={handleFileUpload} tasks={tasks} historyList={historyList} />)}
             {view === 'profile' && (user ? <ProfilePage user={user} setView={setView} /> : <LoginPage setView={setView} />)}
-            {view === 'admin' && (role === 'admin' ? <AdminDashboard setView={setView} user={user} /> : <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />)}
+            {view === 'admin' && (role === 'admin' ? <AdminDashboard setView={setView} user={user} addToast={addToast} /> : <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingManga} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />)}
             {view === 'detail' && selectedManga && <MangaDetailPage manga={selectedManga} setView={setView} onAddToLibrary={handleAddToLibrary} source={selectedSource} setSource={setSelectedSource} setWatchQuery={setWatchQuery} />}
             {view === 'watch' && <WatchPage setView={setView} watchQuery={watchQuery} setWatchQuery={setWatchQuery} addToast={addToast} />}
-            {view === 'anime' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingAnime} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} />}
+            {view === 'anime' && <LandingPage setView={setView} searchQuery={searchQuery} onSelectManga={handleSelectManga} trendingManga={trendingAnime} searchResults={searchResults} onImportUrl={handleImportUrl} favoriteGenres={favoriteGenres} isAnimeMode={true} setIsAnimeMode={setIsAnimeMode} />}
           </motion.div>
         </AnimatePresence>
       </main>
@@ -2592,10 +3241,7 @@ export default function App() {
               <span className="text-lg font-bold">MangaTranslate</span>
             </div>
             <div className="flex gap-8 text-sm text-slate-400">
-              <a className="hover:text-white transition-colors" href="#">Terms</a>
-              <a className="hover:text-white transition-colors" href="#">Privacy</a>
-              <a className="hover:text-white transition-colors" href="#">DMCA</a>
-              <a className="hover:text-white transition-colors" href="#">Discord</a>
+              <a className="hover:text-white transition-colors" href="https://discord.gg/RQMYVMGCCR" target="_blank" rel="noopener noreferrer">Discord</a>
             </div>
             <div className="text-sm text-slate-500">
               © 2026 MangaTranslate. Built by <a href="https://github.com/GYCODES" target="_blank" rel="noopener noreferrer" className="text-primary hover:text-white transition-colors">GYCODES</a>.
@@ -2603,6 +3249,19 @@ export default function App() {
           </div>
         </footer>
       )}
+
+      {/* Floating Feedback Button */}
+      {view !== 'reader' && (
+        <button
+          onClick={() => setIsFeedbackOpen(true)}
+          className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-lg shadow-primary/30 transition-transform hover:scale-110 focus:outline-none"
+          title="Send Feedback"
+        >
+          <MessageSquare size={24} />
+        </button>
+      )}
+
+      <FeedbackModal isOpen={isFeedbackOpen} onClose={() => setIsFeedbackOpen(false)} user={user} />
     </div>
   );
 }

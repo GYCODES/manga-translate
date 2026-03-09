@@ -17,13 +17,15 @@ MangaTranslate is a high-performance, AI-powered web application designed for se
 - **Anime Mode**: Instant toggle between Manga and Anime modes with dedicated landing experiences for both.
 
 ### 🛠️ Advanced Tools
-- **Admin Dashboard**: Comprehensive site management tools.
+- **Admin Dashboard**: Comprehensive site management tools including a Theme Customizer to change site colors on the fly.
+- **User Management**: Admins can view, search, and manage registered users directly from the dashboard.
+- **Robust Feedback System**: Users can submit categorized feedback, and Admins can filter, review (via dynamic modals), update statuses, and delete feedback.
 - **History & Sync**: Track your progress across devices with Supabase-backed history and library synchronization.
-- **Toast Notifications**: Interactive feedback system for network status and streaming availability.
+- **Toast Notifications**: Interactive feedback system for network status, streaming availability, and setting changes.
 
 ## 🛠️ Tech Stack
 - **Frontend**: React, TypeScript, Vite, Framer Motion (motion/react), Lucide Icons.
-- **Backend**: Express.js, Supabase, Node-Fetch.
+- **Backend**: Express.js, Supabase REST APIs, direct PostgreSQL (`pg`) integration for robust Admin access.
 - **AI/ML**: Tesseract.js (OCR), Google Gemini API (Summaries), Python Translation Bridge.
 
 ## 🚦 Getting Started

@@ -39,11 +39,9 @@ def translate_batch(texts, target_lang, source_lang='auto'):
         return texts
     
     translated_texts = []
-    # Force explicit source language if auto-detect fails on manga mixed-character strings
     translator = GoogleTranslator(source=source_lang, target=target_lang)
-    for index, orig in enumerate(texts):
+    for orig in texts:
         try:
-            # Clean up excessively weird elements that reject translation
             clean = str(orig).strip()
             if not clean:
                 translated_texts.append(orig)
@@ -52,7 +50,6 @@ def translate_batch(texts, target_lang, source_lang='auto'):
             res = translator.translate(clean)
             translated_texts.append(res if res else orig)
         except Exception as e:
-            # If Google Translate rejects a single string, fallback only that string
             sys.stderr.write(f"String Translation Error '{str(orig)[:10]}': {str(e)}\n")
             translated_texts.append(orig)
             
@@ -82,7 +79,11 @@ def run_ocr(image_source, lang='japan'):
                 temp_file = None
                 if image_source.startswith('http'):
                     import tempfile
-                    r = requests.get(image_source, stream=True)
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Referer': 'https://mangadex.org/' if 'mangadex' in image_source else 'https://mangabuddy.com/'
+                    }
+                    r = requests.get(image_source, stream=True, headers=headers, timeout=10)
                     if r.status_code == 200:
                         tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png', mode='wb')
                         for chunk in r.iter_content(1024):
@@ -141,38 +142,93 @@ def run_ocr(image_source, lang='japan'):
                             "height": int(max_y - min_y)
                         })
 
-                # Mathematical Bounding-Box Clustering Algorithm
-                # Groups adjacent vertical/horizontal lines into single cohesive speech bubbles
+                # Mathematical Bounding-Box Clustering Algorithm v3
+                # Dual merge: horizontal text (X-overlap) AND vertical columns (Y-overlap)
                 clusters = []
                 for wb in blocks_raw:
-                    merged = False
+                    best_cluster = None
+                    best_score = 0
+                    
                     for cluster in clusters:
-                        # Calculate geometric distance (x, y) between text boxes against the cluster
-                        verticalGap = abs(wb['y'] - cluster['y'])
-                        horizontalGap = wb['x'] - (cluster['x'] + cluster['width'])
+                        # Skip oversized clusters (prevents runaway merges across panels)
+                        if cluster['width'] > 400 or cluster['height'] > 500:
+                            continue
                         
-                        # Dynamic threshold based on cluster height
-                        lineHeight = cluster['height']
+                        # Edge-to-edge distances (always >= 0 if no overlap)
+                        # Vertical edge distance
+                        if wb['y'] > cluster['y'] + cluster['height']:
+                            v_edge = wb['y'] - (cluster['y'] + cluster['height'])
+                        elif cluster['y'] > wb['y'] + wb['height']:
+                            v_edge = cluster['y'] - (wb['y'] + wb['height'])
+                        else:
+                            v_edge = 0  # overlapping vertically
                         
-                        # Intelligent Merge Criteria (Close vertically AND horizontally within same bubble)
-                        if verticalGap < (lineHeight * 2.0) and horizontalGap > -(lineHeight * 1.5) and horizontalGap < (lineHeight * 4.0):
-                            cluster['lines'].append(wb)
-                            
-                            # Expand bounding box to encompass the new line
-                            new_x = min(cluster['x'], wb['x'])
-                            new_y = min(cluster['y'], wb['y'])
-                            new_max_x = max(cluster['x'] + cluster['width'], wb['x'] + wb['width'])
-                            new_max_y = max(cluster['y'] + cluster['height'], wb['y'] + wb['height'])
-                            
-                            cluster['x'] = new_x
-                            cluster['y'] = new_y
-                            cluster['width'] = new_max_x - new_x
-                            cluster['height'] = new_max_y - new_y
-                            
-                            merged = True
-                            break
-                            
-                    if not merged:
+                        # Horizontal edge distance
+                        if wb['x'] > cluster['x'] + cluster['width']:
+                            h_edge = wb['x'] - (cluster['x'] + cluster['width'])
+                        elif cluster['x'] > wb['x'] + wb['width']:
+                            h_edge = cluster['x'] - (wb['x'] + wb['width'])
+                        else:
+                            h_edge = 0  # overlapping horizontally
+                        
+                        # Reference line height (use smaller box as reference)
+                        ref_h = min(cluster['height'], wb['height'] * 2)
+                        if ref_h < 8:
+                            ref_h = max(cluster['height'], wb['height'], 8)
+                        ref_w = min(cluster['width'], wb['width'] * 2)
+                        if ref_w < 8:
+                            ref_w = max(cluster['width'], wb['width'], 8)
+                        
+                        # X-overlap ratio (for horizontal text merging — lines stacked vertically)
+                        x_ol_start = max(wb['x'], cluster['x'])
+                        x_ol_end = min(wb['x'] + wb['width'], cluster['x'] + cluster['width'])
+                        x_overlap = max(0, x_ol_end - x_ol_start)
+                        x_min_w = min(wb['width'], cluster['width'])
+                        x_ratio = x_overlap / x_min_w if x_min_w > 0 else 0
+                        
+                        # Y-overlap ratio (for vertical text — columns side by side)
+                        y_ol_start = max(wb['y'], cluster['y'])
+                        y_ol_end = min(wb['y'] + wb['height'], cluster['y'] + cluster['height'])
+                        y_overlap = max(0, y_ol_end - y_ol_start)
+                        y_min_h = min(wb['height'], cluster['height'])
+                        y_ratio = y_overlap / y_min_h if y_min_h > 0 else 0
+                        
+                        score = 0
+                        
+                        # Path 1: Horizontal text merge (lines stacked below each other)
+                        # Good X-overlap + close vertically
+                        if (x_ratio > 0.20 
+                            and v_edge < ref_h * 1.5
+                            and h_edge < ref_w * 0.5):
+                            score = x_ratio + (1.0 - v_edge / max(ref_h * 1.5, 1))
+                        
+                        # Path 2: Vertical column merge (columns side by side in same bubble)
+                        # Good Y-overlap + close horizontally
+                        if (y_ratio > 0.25 
+                            and h_edge < ref_w * 1.8
+                            and v_edge < ref_h * 0.5):
+                            col_score = y_ratio + (1.0 - h_edge / max(ref_w * 1.8, 1))
+                            score = max(score, col_score)
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_cluster = cluster
+                    
+                    if best_cluster is not None and best_score > 0:
+                        best_cluster['lines'].append(wb)
+                        
+                        # Expand bounding box
+                        new_x = min(best_cluster['x'], wb['x'])
+                        new_y = min(best_cluster['y'], wb['y'])
+                        new_max_x = max(best_cluster['x'] + best_cluster['width'], wb['x'] + wb['width'])
+                        new_max_y = max(best_cluster['y'] + best_cluster['height'], wb['y'] + wb['height'])
+                        
+                        best_cluster['x'] = new_x
+                        best_cluster['y'] = new_y
+                        best_cluster['width'] = new_max_x - new_x
+                        best_cluster['height'] = new_max_y - new_y
+                        
+                    else:
                         clusters.append({
                             'x': wb['x'], 'y': wb['y'], 'width': wb['width'], 'height': wb['height'],
                             'lines': [wb]
