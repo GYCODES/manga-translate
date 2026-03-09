@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --port=5173 --host=0.0.0.0",
     "build": "vite build",
-    "build:server": "tsx -e \"import fs from 'fs'; if(!fs.existsSync('dist-server')) fs.mkdirSync('dist-server')\" && npx tsc server.ts --esModuleInterop --module esnext --target esnext --moduleResolution node --outDir dist-server --skipLibCheck",
+    "build:server": "npx esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.js",
     "start": "node dist-server/server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-server",
