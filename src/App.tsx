@@ -927,7 +927,7 @@ const MangaDetailPage = ({ manga, setView, onAddToLibrary, source, setSource, se
     if (!manga?.title) return;
     try {
       const sanitizedTitle = manga.title.replace(/[^a-zA-Z0-9\s\-:]/g, ' ').replace(/\s+/g, ' ').trim();
-      const res = await fetch(`/api/anime/search?q=${encodeURIComponent(sanitizedTitle)}`);
+      const res = await fetch(`${API_BASE_URL}/api/anime/search?q=${encodeURIComponent(sanitizedTitle)}`);
       const payload = await res.json();
 
       if (payload && payload.length > 0) {
@@ -1410,8 +1410,9 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
 
         // Unwrap proxy URL back to original for OCR (Python needs a real http URL)
         let ocrUrl = pages[currentPage];
-        if (ocrUrl.startsWith('/api/manga/image-proxy?url=')) {
-          ocrUrl = decodeURIComponent(ocrUrl.replace('/api/manga/image-proxy?url=', ''));
+        const proxyMatch = ocrUrl.match(/\/api\/manga\/image-proxy\?url=(.*)/);
+        if (proxyMatch && proxyMatch[1]) {
+          ocrUrl = decodeURIComponent(proxyMatch[1]);
         }
 
         const ocrRes = await fetch(`${API_BASE_URL}/api/ai/ocr`, {
