@@ -21,9 +21,12 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const app = express();
 
 // Configure CORS for Split Deployment
-// Allow requests from the frontend URL defined in FRONTEND_URL, or allow all temporarily.
+// Handle accidental trailing slashes in the env variable
+const rawOrigin = process.env.FRONTEND_URL || '*';
+const cleanOrigin = rawOrigin !== '*' ? rawOrigin.replace(/\/+$/, '') : '*';
+
 const corsOptions = {
-    origin: process.env.FRONTEND_URL || '*',
+    origin: cleanOrigin === '*' ? '*' : [cleanOrigin, `${cleanOrigin}/`],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
 };

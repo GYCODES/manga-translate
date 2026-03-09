@@ -82,8 +82,10 @@ dotenv2.config();
 var { Pool } = pg;
 var pool = new Pool({ connectionString: process.env.DATABASE_URL });
 var app = express();
+var rawOrigin = process.env.FRONTEND_URL || "*";
+var cleanOrigin = rawOrigin !== "*" ? rawOrigin.replace(/\/+$/, "") : "*";
 var corsOptions = {
-  origin: process.env.FRONTEND_URL || "*",
+  origin: cleanOrigin === "*" ? "*" : [cleanOrigin, `${cleanOrigin}/`],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
 };
