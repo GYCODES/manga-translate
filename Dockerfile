@@ -34,10 +34,7 @@ RUN pip3 install deep-translator paddleocr paddlepaddle --break-system-packages
 # Copy the rest of the project files
 COPY . .
 
-# Build the frontend (React/Vite)
-RUN npm run build
-
-# Build the backend server
+# Build the backend server bundle via esbuild
 RUN npm run build:server
 
 # Expose port

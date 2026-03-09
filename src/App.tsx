@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from './lib/api';
 import {
   Search,
   Library,
@@ -789,7 +790,8 @@ const LibraryPage = ({ setView, onSelectManga, user, session }: { setView: (v: V
   const fetchLibrary = async () => {
     if (!user || !session?.access_token) return;
     setLoading(true);
-    const res = await fetch('/api/library', { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+    const headers: Record<string, string> = { 'Authorization': `Bearer ${session.access_token}` };
+    const res = await fetch(`${API_BASE_URL}/api/library`, { headers });
     const data = await res.json();
     if (Array.isArray(data)) setLibraryManga(data);
     setLoading(false);
@@ -802,9 +804,15 @@ const LibraryPage = ({ setView, onSelectManga, user, session }: { setView: (v: V
     if (!session?.access_token) return;
     const newFav = !manga.isFavorite;
     setLibraryManga(prev => prev.map(m => m.id === manga.id ? { ...m, isFavorite: newFav } : m));
-    await fetch(`/api/library/${manga.id}/favorite`, {
+    
+    const headers: Record<string, string> = { 
+        'Authorization': `Bearer ${session.access_token}`, 
+        'Content-Type': 'application/json' 
+    };
+    
+    await fetch(`${API_BASE_URL}/api/library/${manga.id}/favorite`, {
       method: 'PATCH',
-      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ isFavorite: newFav })
     });
   };
@@ -813,7 +821,12 @@ const LibraryPage = ({ setView, onSelectManga, user, session }: { setView: (v: V
     e.stopPropagation();
     if (!session?.access_token) return;
     setLibraryManga(prev => prev.filter(m => m.id !== mangaId));
-    await fetch(`/api/library/${mangaId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${session.access_token}` } });
+    
+    const headers: Record<string, string> = { 'Authorization': `Bearer ${session.access_token}` };
+    await fetch(`${API_BASE_URL}/api/library/${mangaId}`, { 
+        method: 'DELETE', 
+        headers 
+    });
   };
 
   const displayed = libraryManga
@@ -1356,9 +1369,10 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
     if (progressTimerRef.current) clearTimeout(progressTimerRef.current);
     progressTimerRef.current = setTimeout(() => {
       if (session?.access_token) {
-        fetch('/api/progress', {
+        const headers: Record<string, string> = { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' };
+        fetch(`${API_BASE_URL}/api/progress`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ mangaId: manga.id, mangaTitle: manga.title, chapterId: currentChapter.id, chapterNumber: currentChapter.chapter, pageIndex: currentPage, totalPages: pages.length })
         }).catch(() => { });
       }
@@ -1400,7 +1414,7 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
           ocrUrl = decodeURIComponent(ocrUrl.replace('/api/manga/image-proxy?url=', ''));
         }
 
-        const ocrRes = await fetch('/api/ai/ocr-paddle', {
+        const ocrRes = await fetch(`${API_BASE_URL}/api/ai/ocr`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1425,7 +1439,7 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
         }
 
         setStatusText('Translating Script...');
-        const transRes = await fetch('/api/ai/translate-only', {
+        const transRes = await fetch(`${API_BASE_URL}/api/ai/translate-only`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2266,7 +2280,7 @@ const FeedbackModal = ({ isOpen, onClose, user }: { isOpen: boolean, onClose: ()
       const headers: any = { 'Content-Type': 'application/json' };
       if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
 
-      const res = await fetch('/api/feedback', {
+      const res = await fetch(`${API_BASE_URL}/api/feedback`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ message, category })
@@ -2379,7 +2393,7 @@ const AdminDashboard = ({ setView, user, addToast }: { setView: (v: View) => voi
   useEffect(() => {
     fetchUsers();
     fetchFeedback();
-    fetch('/api/settings').then(res => res.json()).then(data => {
+    fetch(`${API_BASE_URL}/api/settings`).then(res => res.json()).then(data => {
       if (data) {
         setPrimaryColor(data.primary_color || '#8b5cf6');
         setBackgroundDark(data.background_dark || '#191022');
@@ -2393,7 +2407,7 @@ const AdminDashboard = ({ setView, user, addToast }: { setView: (v: View) => voi
       const headers: any = { 'Content-Type': 'application/json' };
       if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
 
-      const res = await fetch('/api/admin/settings', {
+      const res = await fetch(`${API_BASE_URL}/api/admin/settings`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ primary_color: primaryColor, background_dark: backgroundDark, theme_mode: 'dark' })
@@ -2424,7 +2438,7 @@ const AdminDashboard = ({ setView, user, addToast }: { setView: (v: View) => voi
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
-      const res = await fetch('/api/admin/users', { headers });
+      const res = await fetch(`${API_BASE_URL}/api/admin/users`, { headers });
       if (res.ok) setUsers(await res.json());
     } catch (err) {
       console.error(err);
@@ -2436,8 +2450,11 @@ const AdminDashboard = ({ setView, user, addToast }: { setView: (v: View) => voi
     setLoadingFeedback(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
-      const res = await fetch('/api/admin/feedback', { headers });
+      const headers: Record<string, string> = {};
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`${API_BASE_URL}/api/admin/feedback`, { headers });
       if (res.ok) setFeedbacks(await res.json());
     } catch (err) {
       console.error(err);
@@ -2991,7 +3008,7 @@ export default function App() {
 
   useEffect(() => {
     // Fetch Global Site Settings
-    fetch('/api/settings').then(res => res.json()).then(data => {
+    fetch(`${API_BASE_URL}/api/settings`).then(res => res.json()).then(data => {
       if (data && data.primary_color) {
         document.documentElement.style.setProperty('--app-primary', data.primary_color);
       }
@@ -3033,7 +3050,7 @@ export default function App() {
 
   useEffect(() => {
     if (isAnimeMode && trendingAnime.length === 0) {
-      fetch('/api/anime/trending')
+      fetch(`${API_BASE_URL}/api/anime/trending`)
         .then(r => r.json())
         .then(data => {
           const items = data?.items || (Array.isArray(data) ? data : []);
@@ -3044,8 +3061,6 @@ export default function App() {
   }, [isAnimeMode]);
 
   useEffect(() => {
-    const headers = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
-
     // Stale-while-revalidate: serve cached trending instantly, then refresh
     const cached = localStorage.getItem('manga_trending_cache');
     if (cached) {
@@ -3066,10 +3081,11 @@ export default function App() {
       }
 
       // Parallel fetch all startup data
+      const headers: Record<string, string> = session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {};
       const [trendingRes, tasksRes, historyRes] = await Promise.allSettled([
-        fetch(`/api/manga/trending${genreParams}`).then(r => r.json()),
-        fetch('/api/tasks/active', { headers }).then(r => r.json()),
-        fetch('/api/history', { headers }).then(r => r.json()),
+        fetch(`${API_BASE_URL}/api/manga/trending${genreParams}`).then(r => r.json()),
+        fetch(`${API_BASE_URL}/api/tasks/active`, { headers }).then(r => r.json()),
+        fetch(`${API_BASE_URL}/api/history`, { headers }).then(r => r.json()),
       ]);
 
       if (trendingRes.status === 'fulfilled') {
@@ -3096,7 +3112,7 @@ export default function App() {
       const endpoint = isAnimeMode
         ? `/api/anime/search?q=${encodeURIComponent(searchQuery)}`
         : `/api/manga/search?q=${encodeURIComponent(searchQuery)}`;
-      fetch(endpoint)
+      fetch(`${API_BASE_URL}${endpoint}`)
         .then(res => res.json())
         .then(data => {
           if (isAnimeMode && Array.isArray(data)) {
@@ -3153,7 +3169,7 @@ export default function App() {
       const headers: any = { 'Content-Type': 'application/json' };
       if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
 
-      const res = await fetch('/api/import/url', {
+      const res = await fetch(`${API_BASE_URL}/api/library/import`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ url }),
@@ -3176,7 +3192,7 @@ export default function App() {
       const headers: any = { 'Content-Type': 'application/json' };
       if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
 
-      const res = await fetch('/api/library', {
+      const res = await fetch(`${API_BASE_URL}/api/library`, {
         method: 'POST',
         headers,
         body: JSON.stringify({

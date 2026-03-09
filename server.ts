@@ -19,7 +19,16 @@ const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const app = express();
-app.use(cors());
+
+// Configure CORS for Split Deployment
+// Allow requests from the frontend URL defined in FRONTEND_URL, or allow all temporarily.
+const corsOptions = {
+    origin: process.env.FRONTEND_URL || '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+};
+app.use(cors(corsOptions));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -1430,50 +1439,8 @@ app.post('/api/ai/ocr-paddle', async (req, res) => {
 
 const PORT = Number(process.env.PORT) || 3000;
 
-// Serve static files from the React app dist folder
-const distPath = fs.existsSync(path.join(__dirname, 'dist')) 
-    ? path.join(__dirname, 'dist') 
-    : path.join(__dirname, '..', 'dist');
-
-console.log(`[Startup] Serving static files from: ${distPath}`);
-
-app.use(express.static(distPath));
-
-app.get('*', (req, res) => {
-    const indexPath = path.join(distPath, 'index.html');
-    if (fs.existsSync(indexPath)) {
-        let html = fs.readFileSync(indexPath, 'utf8');
-        
-        // Inject runtime configuration for the frontend
-        const config = {
-            VITE_SUPABASE_URL: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-            VITE_SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY,
-        };
-        
-        const configScript = `<script id="runtime-config">window.ENV = ${JSON.stringify(config)};</script>`;
-        
-        // Even more robust injection
-        if (html.includes('<script id="runtime-config"></script>')) {
-            html = html.replace('<script id="runtime-config"></script>', configScript);
-        } else if (html.includes('</head>')) {
-            html = html.replace('</head>', `${configScript}\n</head>`);
-        } else if (html.includes('<head>')) {
-            html = html.replace('<head>', `<head>\n${configScript}`);
-        } else {
-            // Fallback: inject at start of <html> or just at very top
-            html = html.replace('<html', `<html data-injected="true"`);
-            html = configScript + html;
-        }
-        
-        if (req.url === '/' || req.url === '/index.html') {
-            console.log(`[RuntimeConfig] Injected into ${req.url} (URL: ${config.VITE_SUPABASE_URL?.substring(0, 10)}...)`);
-        }
-        
-        res.set('Content-Type', 'text/html');
-        res.send(html);
-    } else {
-        res.status(404).send('Frontend build not found. Please run build first.');
-    }
+app.get('/', (req, res) => {
+    res.json({ message: 'MangaTranslate API. Frontend is deployed separately.' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
