@@ -37,6 +37,8 @@ app.get('/api/health', async (req, res) => {
         status: 'ok',
         uptime: process.uptime(),
         internet,
+        distFound: fs.existsSync(path.join(__dirname, 'dist')) || fs.existsSync(path.join(__dirname, '..', 'dist')),
+        dirname: __dirname,
         env: {
             supabaseUrl: !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL),
             supabaseKey: !!(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY),
@@ -1429,10 +1431,16 @@ app.post('/api/ai/ocr-paddle', async (req, res) => {
 const PORT = Number(process.env.PORT) || 3000;
 
 // Serve static files from the React app dist folder
-app.use(express.static(path.join(__dirname, 'dist')));
+const distPath = fs.existsSync(path.join(__dirname, 'dist')) 
+    ? path.join(__dirname, 'dist') 
+    : path.join(__dirname, '..', 'dist');
+
+console.log(`[Startup] Serving static files from: ${distPath}`);
+
+app.use(express.static(distPath));
 
 app.get('*', (req, res) => {
-    const indexPath = path.join(__dirname, 'dist', 'index.html');
+    const indexPath = path.join(distPath, 'index.html');
     if (fs.existsSync(indexPath)) {
         let html = fs.readFileSync(indexPath, 'utf8');
         
