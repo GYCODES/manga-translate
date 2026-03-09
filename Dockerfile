@@ -37,8 +37,11 @@ COPY . .
 # Build the frontend (React/Vite)
 RUN npm run build
 
+# Build the backend server
+RUN npm run build:server
+
 # Expose port
 EXPOSE 3000
 
-# Command to run the backend
-CMD ["npx", "tsx", "server.ts"]
+# Command to run the backend (using the compiled JS version)
+CMD ["npm", "start"]

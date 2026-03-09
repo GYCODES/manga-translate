@@ -144,7 +144,30 @@ const Navbar = ({ currentView, setView, onUpload, searchQuery, setSearchQuery, u
   return (
     <header className="fixed top-0 z-50 w-full border-b border-white/10 bg-[#191022]/85 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => setView('landing')}>
+        <div className="flex items-center gap-2 cursor-pointer shrink-0" 
+          onClick={(e) => {
+            // Secret Debug Trigger: Click logo 5 times within 3 seconds
+            const now = Date.now();
+            const last = (window as any)._lastLogoClick || 0;
+            const count = (window as any)._logoClickCount || 0;
+            if (now - last < 3000) {
+              (window as any)._logoClickCount = count + 1;
+              if (count + 1 >= 5) {
+                alert(`--- DEPLOYMENT DIAGNOSTICS ---\n` +
+                      `URL: ${window.location.href}\n` +
+                      `window.ENV: ${JSON.stringify(window.ENV, null, 2)}\n` +
+                      `Supabase URL: ${((window as any).supabaseDebug?.url || 'Missing')}\n` +
+                      `Supabase Key: ${((window as any).supabaseDebug?.keyPresent ? 'Present' : 'Missing')}\n` +
+                      `Try visiting /api/health for backend state.`);
+                (window as any)._logoClickCount = 0;
+              }
+            } else {
+              (window as any)._logoClickCount = 1;
+            }
+            (window as any)._lastLogoClick = now;
+            setView('landing');
+          }}
+        >
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/20 text-primary">
             {isAnimeMode ? <Zap size={20} className="text-[#FF6B6B]" /> : <Languages size={20} />}
           </div>

@@ -24,10 +24,19 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ---- Health Check & Debug ----
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+    let internet = false;
+    try {
+        const test = await fetch('https://www.google.com', { signal: AbortSignal.timeout(2000) });
+        internet = test.ok;
+    } catch (e) {
+        internet = false;
+    }
+
     res.json({
         status: 'ok',
         uptime: process.uptime(),
+        internet,
         env: {
             supabaseUrl: !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL),
             supabaseKey: !!(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY),
@@ -405,14 +414,14 @@ app.get('/api/anime/search', async (req, res) => {
                 }
 
                 for (const cand of candidates) {
-                    if (cand.toLowerCase() === query.toLowerCase()) continue; // Already tried
+                    if (cand.toLowerCase() === query.toLowerCase()) continue;
 
                     const fallbackUrl = `https://www.sankavollerei.com/anime/search/${encodeURIComponent(cand)}`;
                     const fallbackResponse = await fetch(fallbackUrl);
                     if (fallbackResponse.ok) {
                         const fallbackJson = await fallbackResponse.json();
                         if (fallbackJson?.data?.animeList && fallbackJson.data.animeList.length > 0) {
-                            // Success! Cache and return
+                            console.log(`[AnimeSearch] SUCCESS with fallback: ${cand}`);
                             setCache(cacheKey, fallbackJson.data.animeList);
                             return res.json(fallbackJson.data.animeList);
                         }
@@ -420,12 +429,13 @@ app.get('/api/anime/search', async (req, res) => {
                 }
             }
         } catch (fallbackErr) {
-            console.error('Anime Search Fallback Error:', fallbackErr);
+            console.error('[AnimeSearch] Jikan Fallback failure:', fallbackErr);
         }
 
-        return res.json([]);
-    } catch (err) {
-        console.error('Anime Search Error:', err);
+        console.log(`[AnimeSearch] No results found for: ${query}`);
+        res.json([]);
+    } catch (err: any) {
+        console.error('Anime Endpoint Error:', err);
         res.status(500).json({ error: 'Server error during anime search' });
     }
 });

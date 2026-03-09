@@ -30,3 +30,10 @@ export const supabase = createClient(
     supabaseUrl || 'https://placeholder.supabase.co',
     supabaseAnonKey || 'placeholder-key'
 );
+
+(window as any).supabaseDebug = {
+    client: supabase,
+    url: supabaseUrl,
+    keyPresent: !!supabaseAnonKey,
+    env: window.ENV
+};
