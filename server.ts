@@ -23,6 +23,20 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// ---- Health Check & Debug ----
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        uptime: process.uptime(),
+        env: {
+            supabaseUrl: !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL),
+            supabaseKey: !!(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY),
+            geminiKey: !!process.env.GEMINI_API_KEY,
+            port: process.env.PORT
+        }
+    });
+});
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 const aiModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-8b' });
 
@@ -1420,16 +1434,23 @@ app.get('*', (req, res) => {
         
         const configScript = `<script id="runtime-config">window.ENV = ${JSON.stringify(config)};</script>`;
         
-        // More robust injection: try placeholder first, then </head>, then start of file
+        // Even more robust injection
         if (html.includes('<script id="runtime-config"></script>')) {
             html = html.replace('<script id="runtime-config"></script>', configScript);
         } else if (html.includes('</head>')) {
             html = html.replace('</head>', `${configScript}\n</head>`);
+        } else if (html.includes('<head>')) {
+            html = html.replace('<head>', `<head>\n${configScript}`);
         } else {
+            // Fallback: inject at start of <html> or just at very top
+            html = html.replace('<html', `<html data-injected="true"`);
             html = configScript + html;
         }
         
-        console.log(`[RuntimeConfig] Injected config for ${req.url}`);
+        if (req.url === '/' || req.url === '/index.html') {
+            console.log(`[RuntimeConfig] Injected into ${req.url} (URL: ${config.VITE_SUPABASE_URL?.substring(0, 10)}...)`);
+        }
+        
         res.set('Content-Type', 'text/html');
         res.send(html);
     } else {
