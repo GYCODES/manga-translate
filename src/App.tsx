@@ -1293,13 +1293,13 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
     const loadChapters = async () => {
       try {
         // Pass manga title so the backend can resolve stale/wrong IDs via MangaDex title search
-        let data = await fetch(`/api/manga/${manga.id}/chapters?title=${encodeURIComponent(manga.title)}&source=${source}`).then(res => res.json());
+        let data = await fetch(`${API_BASE_URL}/api/manga/${manga.id}/chapters?title=${encodeURIComponent(manga.title)}&source=${source}`).then(res => res.json());
 
         // Fallback: If MangaDex API blocked the feed, use our backend scraper
         if (!data || data.length === 0) {
           setStatusText('API Blocked. Scraping alternate sources...');
           // Pass manga title directly — MangaDex blocks metadata fetches for licensed titles
-          data = await fetch(`/api/scrape/chapters?title=${encodeURIComponent(manga.title)}`).then(r => r.json());
+          data = await fetch(`${API_BASE_URL}/api/scrape/chapters?title=${encodeURIComponent(manga.title)}`).then(r => r.json());
 
           if (!data || data.length === 0) {
             setStatusText('No chapters available for this manga.');
@@ -1323,7 +1323,7 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
         let startPage = 0;
         if (session?.access_token) {
           try {
-            const p = await fetch(`/api/progress/${manga.id}`, { headers: { Authorization: `Bearer ${session.access_token}` } }).then(r => r.json());
+            const p = await fetch(`${API_BASE_URL}/api/progress/${manga.id}`, { headers: { Authorization: `Bearer ${session.access_token}` } }).then(r => r.json());
             if (p?.chapter_id) {
               const idx = data.findIndex((c: any) => c.id === p.chapter_id);
               if (idx >= 0) { startChIdx = idx; startPage = p.page_index || 0; }
@@ -1350,12 +1350,12 @@ const Reader = ({ setView, manga, session, source }: { setView: (v: View) => voi
 
     // If chapter.id is a URL (from scraper fallback), use the scraper pages endpoint
     const chapterId = currentChapter.id;
-    fetch(`/api/manga/chapter/${encodeURIComponent(chapterId)}/pages?source=${source}`)
+    fetch(`${API_BASE_URL}/api/manga/chapter/${encodeURIComponent(chapterId)}/pages?source=${source}`)
       .then(r => r.json())
       .then((data: string[]) => {
         if (data && data.length > 0) {
           // Always route images through Node to spoof the referer and bypass CORS/403 Forbidden
-          setPages(data.map(url => `/api/manga/image-proxy?url=${encodeURIComponent(url)}`));
+          setPages(data.map(url => `${API_BASE_URL}/api/manga/image-proxy?url=${encodeURIComponent(url)}`));
           setStatusText('');
         } else {
           setStatusText('No pages found for this chapter.');
