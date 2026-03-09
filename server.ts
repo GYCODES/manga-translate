@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { supabase } from './src/db/supabase.js';
 import { fetchMangaChapters, fetchPageImages, fetchMangaMetadata, searchMangaUrl } from './src/services/mangaProvider.js';
@@ -1403,9 +1404,27 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // The "catchall" handler: for any request that doesn't
-// match one above, send back React's index.html file.
+// match one above, send back React's index.html file with runtime config injected.
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    const indexPath = path.join(__dirname, 'dist', 'index.html');
+    if (fs.existsSync(indexPath)) {
+        let html = fs.readFileSync(indexPath, 'utf8');
+        
+        // Inject runtime configuration for the frontend
+        const config = {
+            VITE_SUPABASE_URL: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+            VITE_SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY,
+        };
+        
+        const configScript = `<script id="runtime-config">window.ENV = ${JSON.stringify(config)};</script>`;
+        // Use a more robust regex to find the script tag, handling potential minification or attribute changes
+        html = html.replace(/<script id="runtime-config">.*?<\/script>/, configScript);
+        
+        res.set('Content-Type', 'text/html');
+        res.send(html);
+    } else {
+        res.status(404).send('Frontend build not found. Please run build first.');
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
