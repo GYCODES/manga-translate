@@ -1397,7 +1397,7 @@ app.post('/api/ai/ocr-paddle', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Serve static files from the React app dist folder
 app.use(express.static(path.join(__dirname, 'dist')));
