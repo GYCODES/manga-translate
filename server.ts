@@ -363,7 +363,11 @@ app.get('/api/anime/search', async (req, res) => {
                 if (json?.data?.animeList && json.data.animeList.length > 0) {
                     setCache(cacheKey, json.data.animeList);
                     return res.json(json.data.animeList);
+                } else {
+                    console.log(`[AnimeSearch] No results on Sanka for: ${query}`);
                 }
+            } else {
+                console.error(`[AnimeSearch] Sanka API error: ${response.status} ${response.statusText}`);
             }
         } catch (initialErr) {
             console.error('Initial Anime Search Error (Sanka):', initialErr);
@@ -1403,8 +1407,6 @@ const PORT = Number(process.env.PORT) || 3000;
 // Serve static files from the React app dist folder
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// The "catchall" handler: for any request that doesn't
-// match one above, send back React's index.html file with runtime config injected.
 app.get('*', (req, res) => {
     const indexPath = path.join(__dirname, 'dist', 'index.html');
     if (fs.existsSync(indexPath)) {
@@ -1417,9 +1419,17 @@ app.get('*', (req, res) => {
         };
         
         const configScript = `<script id="runtime-config">window.ENV = ${JSON.stringify(config)};</script>`;
-        // Use a more robust regex to find the script tag, handling potential minification or attribute changes
-        html = html.replace(/<script id="runtime-config">.*?<\/script>/, configScript);
         
+        // More robust injection: try placeholder first, then </head>, then start of file
+        if (html.includes('<script id="runtime-config"></script>')) {
+            html = html.replace('<script id="runtime-config"></script>', configScript);
+        } else if (html.includes('</head>')) {
+            html = html.replace('</head>', `${configScript}\n</head>`);
+        } else {
+            html = configScript + html;
+        }
+        
+        console.log(`[RuntimeConfig] Injected config for ${req.url}`);
         res.set('Content-Type', 'text/html');
         res.send(html);
     } else {
@@ -1430,4 +1440,10 @@ app.get('*', (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`OCR Service: ${process.env.OCR_REST_API ? 'REST API (' + process.env.OCR_REST_API + ')' : 'Local Python bridge'}`);
+    
+    // Obfuscated ENV check for Render logs
+    const sUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'MISSING';
+    const sKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'MISSING';
+    console.log(`[Startup] Supabase URL: ${sUrl.substring(0, 15)}...`);
+    console.log(`[Startup] Supabase Key: ${sKey ? 'PRESENT (starts with ' + sKey.substring(0, 5) + ')' : 'MISSING'}`);
 });

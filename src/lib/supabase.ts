@@ -15,6 +15,11 @@ const supabaseUrl = window.ENV?.VITE_SUPABASE_URL || import.meta.env.VITE_SUPABA
 const supabaseAnonKey = window.ENV?.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 // Debug identification for Render logs
+console.log("[Supabase] window.ENV state:", window.ENV ? "Defined" : "Undefined");
+if (window.ENV) {
+    console.log("[Supabase] VITE_SUPABASE_URL in window.ENV:", window.ENV.VITE_SUPABASE_URL ? "Present" : "Missing");
+}
+
 if (!supabaseUrl || !supabaseAnonKey) {
     console.warn("Supabase credentials missing! App features will be broken. Check Render ENV settings.");
 } else {

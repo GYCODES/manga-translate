@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     libgif-dev \
     librsvg2-dev \
+    libgl1-mesa-glx \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Map 'python' to 'python3'
@@ -23,8 +28,8 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install
 
-# Install Python translation library
-RUN pip3 install deep-translator --break-system-packages
+# Install Python libraries for translation and OCR
+RUN pip3 install deep-translator paddleocr paddlepaddle --break-system-packages
 
 # Copy the rest of the project files
 COPY . .
